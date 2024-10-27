@@ -1,0 +1,10 @@
+ <component-set>
+    <components>
+        <component>
+            <role>org.apache.maven.wagon.Wagon</role>
+            <role-hint>ghrelasset</role-hint>
+            <implementation>com.amadeus.maven.wagon.GhRelAssetWagon</implementation>
+            <instantiation-strategy>per-lookup</instantiation-strategy>
+        </component>
+    </components>
+</component-set>
