@@ -17,6 +17,7 @@ on:
       - '*.md'
       - '*.adoc'
       - '*.txt'
+  workflow_dispatch:
 
 jobs:
   build:
