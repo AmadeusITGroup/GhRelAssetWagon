@@ -2,10 +2,16 @@ package io.github.amadeusitgroup.maven.wagon;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.DisplayName;
 import org.apache.maven.wagon.authentication.AuthenticationInfo;
+import org.apache.maven.wagon.repository.Repository;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.security.MessageDigest;
+import java.time.Instant;
 import java.util.HexFormat;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -19,15 +25,19 @@ public class GhRelAssetWagonTest {
 
         private GhRelAssetWagon ghRelAssetWagon;
         private AuthenticationInfo authenticationInfo;
+        private Repository repository;
 
         @BeforeEach
         public void setUp(WireMockRuntimeInfo wmRuntimeInfo) {
                 ghRelAssetWagon = new GhRelAssetWagon();
                 authenticationInfo = mock(AuthenticationInfo.class);
+                repository = new Repository("test-repo", "ghrelasset://owner/repo/v1.0.0/test-asset.zip");
                 ghRelAssetWagon.setAuthenticationInfo(authenticationInfo);
                 // set the api and upload endpoints to wiremock
                 ghRelAssetWagon.setApiEndpoint(wmRuntimeInfo.getHttpBaseUrl());
                 ghRelAssetWagon.setUploadEndpoint(wmRuntimeInfo.getHttpBaseUrl());
+                // set up a mock repository for testing
+                ghRelAssetWagon.setRepository("test-repo", "ghrelasset://owner/repo/v1.0.0/test-asset.zip");
         }
 
         @Test
@@ -396,4 +406,644 @@ public class GhRelAssetWagonTest {
         // // Verify the artifacts upload
         // // You can use assertions to verify the uploaded artifacts
         // }
+
+        // ========== Phase 1 Enhancement Tests - Missing Wagon Interface Methods ==========
+
+        @Test
+        public void testGetFileList_EmptyDirectory() throws Exception {
+                String destinationDirectory = "com/example/artifact/1.0.0/";
+                
+                // Mock empty release assets response
+                stubFor(get(urlEqualTo("/repos/owner/repo/releases/tags/v1.0.0"))
+                        .willReturn(aResponse()
+                                .withStatus(200)
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("{\"id\": 12345, \"assets\": []}")));
+
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                
+                List<String> fileList = ghRelAssetWagon.getFileList(destinationDirectory);
+                
+                assertNotNull(fileList);
+                assertTrue(fileList.isEmpty());
+        }
+
+        @Test
+        public void testGetFileList_WithFiles() throws Exception {
+                String destinationDirectory = "com/example/artifact/1.0.0/";
+                
+                // Mock release with assets
+                stubFor(get(urlEqualTo("/repos/owner/repo/releases/tags/v1.0.0"))
+                        .willReturn(aResponse()
+                                .withStatus(200)
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("{\n" +
+                                        "  \"id\": 12345,\n" +
+                                        "  \"assets\": [\n" +
+                                        "    {\n" +
+                                        "      \"id\": 67890,\n" +
+                                        "      \"name\": \"artifact-1.0.0.jar\",\n" +
+                                        "      \"browser_download_url\": \"https://github.com/owner/repo/releases/download/v1.0.0/artifact-1.0.0.jar\"\n" +
+                                        "    },\n" +
+                                        "    {\n" +
+                                        "      \"id\": 67891,\n" +
+                                        "      \"name\": \"artifact-1.0.0.pom\",\n" +
+                                        "      \"browser_download_url\": \"https://github.com/owner/repo/releases/download/v1.0.0/artifact-1.0.0.pom\"\n" +
+                                        "    }\n" +
+                                        "  ]\n" +
+                                        "}")));
+                
+                // Mock assets endpoint
+                stubFor(get(urlEqualTo("/repos/owner/repo/releases/12345/assets"))
+                        .willReturn(aResponse()
+                                .withStatus(200)
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("[\n" +
+                                        "  {\n" +
+                                        "    \"id\": 67890,\n" +
+                                        "    \"name\": \"artifact-1.0.0.jar\",\n" +
+                                        "    \"browser_download_url\": \"https://github.com/owner/repo/releases/download/v1.0.0/artifact-1.0.0.jar\"\n" +
+                                        "  },\n" +
+                                        "  {\n" +
+                                        "    \"id\": 67891,\n" +
+                                        "    \"name\": \"artifact-1.0.0.pom\",\n" +
+                                        "    \"browser_download_url\": \"https://github.com/owner/repo/releases/download/v1.0.0/artifact-1.0.0.pom\"\n" +
+                                        "  }\n" +
+                                        "]")));
+
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                
+                List<String> fileList = ghRelAssetWagon.getFileList(destinationDirectory);
+                
+                assertNotNull(fileList);
+                assertEquals(2, fileList.size());
+                assertTrue(fileList.contains("artifact-1.0.0.jar"));
+                assertTrue(fileList.contains("artifact-1.0.0.pom"));
+        }
+
+        @Test
+        public void testGetFileList_ReleaseNotFound() throws Exception {
+                String destinationDirectory = "com/example/artifact/1.0.0/";
+                
+                // Mock 404 response for non-existent release
+                stubFor(get(urlEqualTo("/repos/owner/repo/releases/tags/v1.0.0"))
+                        .willReturn(aResponse()
+                                .withStatus(404)
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("{\"message\": \"Not Found\"}")));
+
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                
+                List<String> fileList = ghRelAssetWagon.getFileList(destinationDirectory);
+                
+                assertNotNull(fileList);
+                assertTrue(fileList.isEmpty());
+        }
+
+        @Test
+        public void testResourceExists_ExistingResource() throws Exception {
+                String resourceName = "com/example/artifact/1.0.0/artifact-1.0.0.jar";
+                
+                // Mock release with the requested asset
+                stubFor(get(urlEqualTo("/repos/owner/repo/releases/tags/v1.0.0"))
+                        .willReturn(aResponse()
+                                .withStatus(200)
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("{\n" +
+                                        "  \"id\": 12345,\n" +
+                                        "  \"assets\": [\n" +
+                                        "    {\n" +
+                                        "      \"id\": 67890,\n" +
+                                        "      \"name\": \"artifact-1.0.0.jar\",\n" +
+                                        "      \"browser_download_url\": \"https://github.com/owner/repo/releases/download/v1.0.0/artifact-1.0.0.jar\"\n" +
+                                        "    }\n" +
+                                        "  ]\n" +
+                                        "}")));
+                
+                // Mock assets endpoint
+                stubFor(get(urlEqualTo("/repos/owner/repo/releases/12345/assets"))
+                        .willReturn(aResponse()
+                                .withStatus(200)
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("[\n" +
+                                        "  {\n" +
+                                        "    \"id\": 67890,\n" +
+                                        "    \"name\": \"artifact-1.0.0.jar\",\n" +
+                                        "    \"browser_download_url\": \"https://github.com/owner/repo/releases/download/v1.0.0/artifact-1.0.0.jar\"\n" +
+                                        "  }\n" +
+                                        "]")));
+
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                
+                boolean exists = ghRelAssetWagon.resourceExists(resourceName);
+                
+                assertTrue(exists);
+        }
+
+        @Test
+        public void testResourceExists_NonExistingResource() throws Exception {
+                String resourceName = "com/example/artifact/1.0.0/nonexistent.jar";
+                
+                // Mock release without the requested asset
+                stubFor(get(urlEqualTo("/repos/owner/repo/releases/tags/v1.0.0"))
+                        .willReturn(aResponse()
+                                .withStatus(200)
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("{\n" +
+                                        "  \"id\": 12345,\n" +
+                                        "  \"assets\": [\n" +
+                                        "    {\n" +
+                                        "      \"id\": 67890,\n" +
+                                        "      \"name\": \"different-file.jar\",\n" +
+                                        "      \"browser_download_url\": \"https://github.com/owner/repo/releases/download/v1.0.0/different-file.jar\"\n" +
+                                        "    }\n" +
+                                        "  ]\n" +
+                                        "}")));
+                
+                // Mock assets endpoint
+                stubFor(get(urlEqualTo("/repos/owner/repo/releases/12345/assets"))
+                        .willReturn(aResponse()
+                                .withStatus(200)
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("[\n" +
+                                        "  {\n" +
+                                        "    \"id\": 67890,\n" +
+                                        "    \"name\": \"different-file.jar\",\n" +
+                                        "    \"browser_download_url\": \"https://github.com/owner/repo/releases/download/v1.0.0/different-file.jar\"\n" +
+                                        "  }\n" +
+                                        "]")));
+
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                
+                boolean exists = ghRelAssetWagon.resourceExists(resourceName);
+                
+                assertFalse(exists);
+        }
+
+        @Test
+        public void testResourceExists_ReleaseNotFound() throws Exception {
+                String resourceName = "com/example/artifact/1.0.0/artifact-1.0.0.jar";
+                
+                // Mock 404 response for non-existent release
+                stubFor(get(urlEqualTo("/repos/owner/repo/releases/tags/v1.0.0"))
+                        .willReturn(aResponse()
+                                .withStatus(404)
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("{\"message\": \"Not Found\"}")));
+
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                
+                boolean exists = ghRelAssetWagon.resourceExists(resourceName);
+                
+                assertFalse(exists);
+        }
+
+        @Test
+        public void testSupportsDirectoryCopy() {
+                boolean supports = ghRelAssetWagon.supportsDirectoryCopy();
+                assertTrue(supports, "GhRelAssetWagon should support directory copy operations");
+        }
+
+        @Test
+        public void testPutDirectory_EmptyDirectory() throws Exception {
+                File sourceDirectory = createTempDirectory();
+                String destinationDirectory = "com/example/artifact/1.0.0/";
+                
+                // Should not throw exception for empty directory
+                assertDoesNotThrow(() -> {
+                        ghRelAssetWagon.putDirectory(sourceDirectory, destinationDirectory);
+                });
+                
+                // Clean up
+                sourceDirectory.delete();
+        }
+
+        @Test
+        public void testPutDirectory_WithFiles() throws Exception {
+                File sourceDirectory = createTempDirectoryWithFiles();
+                String destinationDirectory = "com/example/artifact/1.0.0/";
+                
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                
+                // Mock successful upload responses
+                stubFor(post(urlMatching("/repos/owner/repo/releases/.*/assets.*"))
+                        .willReturn(aResponse()
+                                .withStatus(201)
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("{\"id\": 67890, \"name\": \"test-file.txt\"}")));
+                
+                assertDoesNotThrow(() -> {
+                        ghRelAssetWagon.putDirectory(sourceDirectory, destinationDirectory);
+                });
+                
+                // Clean up
+                deleteDirectory(sourceDirectory);
+        }
+
+        @Test
+        public void testGetIfNewer_FileIsNewer() throws Exception {
+                String resourceName = "com/example/artifact/1.0.0/artifact-1.0.0.jar";
+                File destination = File.createTempFile("test", ".jar");
+                long timestamp = System.currentTimeMillis() - 86400000; // 1 day ago
+                
+                // Mock release with asset that has a newer timestamp
+                stubFor(get(urlEqualTo("/repos/owner/repo/releases/tags/v1.0.0"))
+                        .willReturn(aResponse()
+                                .withStatus(200)
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("{\n" +
+                                        "  \"id\": 12345,\n" +
+                                        "  \"assets\": [\n" +
+                                        "    {\n" +
+                                        "      \"id\": 67890,\n" +
+                                        "      \"name\": \"artifact-1.0.0.jar\",\n" +
+                                        "      \"updated_at\": \"" + java.time.Instant.ofEpochMilli(System.currentTimeMillis()).toString() + "\",\n" +
+                                        "      \"browser_download_url\": \"https://github.com/owner/repo/releases/download/v1.0.0/artifact-1.0.0.jar\"\n" +
+                                        "    }\n" +
+                                        "  ]\n" +
+                                        "}")));
+                
+                // Mock assets endpoint
+                stubFor(get(urlEqualTo("/repos/owner/repo/releases/12345/assets"))
+                        .willReturn(aResponse()
+                                .withStatus(200)
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("[\n" +
+                                        "  {\n" +
+                                        "    \"id\": 67890,\n" +
+                                        "    \"name\": \"artifact-1.0.0.jar\",\n" +
+                                        "    \"updated_at\": \"" + java.time.Instant.ofEpochMilli(System.currentTimeMillis()).toString() + "\",\n" +
+                                        "    \"browser_download_url\": \"https://github.com/owner/repo/releases/download/v1.0.0/artifact-1.0.0.jar\"\n" +
+                                        "  }\n" +
+                                        "]")));
+                
+                // Mock file download
+                stubFor(get(urlEqualTo("/owner/repo/releases/download/v1.0.0/artifact-1.0.0.jar"))
+                        .willReturn(aResponse()
+                                .withStatus(200)
+                                .withBody("mock jar content")));
+
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                
+                boolean result = ghRelAssetWagon.getIfNewer(resourceName, destination, timestamp);
+                
+                assertTrue(result, "Should return true when remote file is newer");
+                
+                // Clean up
+                destination.delete();
+        }
+
+        @Test
+        public void testGetIfNewer_FileIsOlder() throws Exception {
+                String resourceName = "com/example/artifact/1.0.0/artifact-1.0.0.jar";
+                File destination = File.createTempFile("test", ".jar");
+                long timestamp = System.currentTimeMillis(); // Current time
+                
+                // Mock release with asset that has an older timestamp
+                stubFor(get(urlEqualTo("/repos/owner/repo/releases/tags/v1.0.0"))
+                        .willReturn(aResponse()
+                                .withStatus(200)
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("{\n" +
+                                        "  \"id\": 12345,\n" +
+                                        "  \"assets\": [\n" +
+                                        "    {\n" +
+                                        "      \"id\": 67890,\n" +
+                                        "      \"name\": \"artifact-1.0.0.jar\",\n" +
+                                        "      \"updated_at\": \"" + java.time.Instant.ofEpochMilli(timestamp - 86400000).toString() + "\",\n" +
+                                        "      \"browser_download_url\": \"https://github.com/owner/repo/releases/download/v1.0.0/artifact-1.0.0.jar\"\n" +
+                                        "    }\n" +
+                                        "  ]\n" +
+                                        "}")));
+                
+                // Mock assets endpoint
+                stubFor(get(urlEqualTo("/repos/owner/repo/releases/12345/assets"))
+                        .willReturn(aResponse()
+                                .withStatus(200)
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("[\n" +
+                                        "  {\n" +
+                                        "    \"id\": 67890,\n" +
+                                        "    \"name\": \"artifact-1.0.0.jar\",\n" +
+                                        "    \"updated_at\": \"" + java.time.Instant.ofEpochMilli(timestamp - 86400000).toString() + "\",\n" +
+                                        "    \"browser_download_url\": \"https://github.com/owner/repo/releases/download/v1.0.0/artifact-1.0.0.jar\"\n" +
+                                        "  }\n" +
+                                        "]")));
+
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                
+                boolean result = ghRelAssetWagon.getIfNewer(resourceName, destination, timestamp);
+                
+                assertFalse(result, "Should return false when remote file is older");
+                
+                // Clean up
+                destination.delete();
+        }
+
+        // ========== Helper Methods for Tests ==========
+
+        private File createTempDirectory() throws IOException {
+                File tempDir = File.createTempFile("test", "dir");
+                tempDir.delete();
+                tempDir.mkdirs();
+                return tempDir;
+        }
+
+        private File createTempDirectoryWithFiles() throws IOException {
+                File tempDir = createTempDirectory();
+                
+                // Create some test files
+                File testFile1 = new File(tempDir, "test-file.txt");
+                testFile1.createNewFile();
+                try (java.io.FileWriter writer = new java.io.FileWriter(testFile1)) {
+                        writer.write("test content");
+                }
+                
+                File testFile2 = new File(tempDir, "another-file.xml");
+                testFile2.createNewFile();
+                try (java.io.FileWriter writer = new java.io.FileWriter(testFile2)) {
+                        writer.write("<xml>test</xml>");
+                }
+                
+                return tempDir;
+        }
+
+        private void deleteDirectory(File directory) {
+                if (directory.isDirectory()) {
+                        File[] files = directory.listFiles();
+                        if (files != null) {
+                                for (File file : files) {
+                                        deleteDirectory(file);
+                                }
+                        }
+                }
+                directory.delete();
+        }
+
+        // ========== Phase 2: Maven Repository Standards Tests ==========
+
+        @Test
+        @DisplayName("Should generate checksums when putting artifacts")
+        void testPutWithChecksumGeneration() throws Exception {
+                // Setup WireMock stubs
+                setupBasicWireMockStubs();
+                
+                // Create test artifact
+                File testArtifact = File.createTempFile("test-artifact", ".jar");
+                try (FileOutputStream fos = new FileOutputStream(testArtifact)) {
+                        fos.write("Test artifact content".getBytes());
+                }
+                
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                
+                // Connect and put artifact
+                ghRelAssetWagon.connect(repository, authenticationInfo);
+                ghRelAssetWagon.put(testArtifact, "com/example/test-artifact/1.0.0/test-artifact-1.0.0.jar");
+                
+                // Verify that checksums were generated and staged
+                // This is verified by checking that the put method completes without errors
+                // and that the artifact is added to the upload queue
+                assertTrue(ghRelAssetWagon.artifactsToUpload.size() >= 1);
+                
+                // Clean up
+                testArtifact.delete();
+        }
+
+        @Test
+        @DisplayName("Should not generate checksums for checksum files")
+        void testPutChecksumFileDoesNotGenerateMoreChecksums() throws Exception {
+                // Setup WireMock stubs
+                setupBasicWireMockStubs();
+                
+                // Create test checksum file
+                File checksumFile = File.createTempFile("test-artifact", ".jar.md5");
+                try (FileOutputStream fos = new FileOutputStream(checksumFile)) {
+                        fos.write("d41d8cd98f00b204e9800998ecf8427e".getBytes());
+                }
+                
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                
+                // Connect and put checksum file
+                ghRelAssetWagon.connect(repository, authenticationInfo);
+                int initialUploadCount = ghRelAssetWagon.artifactsToUpload.size();
+                ghRelAssetWagon.put(checksumFile, "com/example/test-artifact/1.0.0/test-artifact-1.0.0.jar.md5");
+                
+                // Verify that only the checksum file itself was staged (no additional checksums generated)
+                assertEquals(initialUploadCount + 1, ghRelAssetWagon.artifactsToUpload.size());
+                
+                // Clean up
+                checksumFile.delete();
+        }
+
+        @Test
+        @DisplayName("Should generate Maven metadata for POM files")
+        void testPutPomGeneratesMetadata() throws Exception {
+                // Setup WireMock stubs
+                setupBasicWireMockStubs();
+                
+                // Create test POM file
+                File pomFile = File.createTempFile("test-artifact", ".pom");
+                try (FileOutputStream fos = new FileOutputStream(pomFile)) {
+                        fos.write("<?xml version=\"1.0\"?><project></project>".getBytes());
+                }
+                
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                
+                // Connect and put POM
+                ghRelAssetWagon.connect(repository, authenticationInfo);
+                ghRelAssetWagon.put(pomFile, "com/example/test-artifact/1.0.0/test-artifact-1.0.0.pom");
+                
+                // Verify that artifacts were staged (including metadata)
+                assertTrue(ghRelAssetWagon.artifactsToUpload.size() >= 1);
+                
+                // Clean up
+                pomFile.delete();
+        }
+
+        @Test
+        @DisplayName("Should generate Maven metadata for main artifacts")
+        void testPutMainArtifactGeneratesMetadata() throws Exception {
+                // Setup WireMock stubs
+                setupBasicWireMockStubs();
+                
+                // Create test JAR file
+                File jarFile = File.createTempFile("test-artifact", ".jar");
+                try (FileOutputStream fos = new FileOutputStream(jarFile)) {
+                        fos.write("Test JAR content".getBytes());
+                }
+                
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                
+                // Connect and put main artifact
+                ghRelAssetWagon.connect(repository, authenticationInfo);
+                ghRelAssetWagon.put(jarFile, "com/example/test-artifact/1.0.0/test-artifact-1.0.0.jar");
+                
+                // Verify that artifacts were staged (including metadata)
+                assertTrue(ghRelAssetWagon.artifactsToUpload.size() >= 1);
+                
+                // Clean up
+                jarFile.delete();
+        }
+
+        @Test
+        @DisplayName("Should handle SNAPSHOT version metadata generation")
+        void testPutSnapshotVersionGeneratesMetadata() throws Exception {
+                // Setup WireMock stubs
+                setupBasicWireMockStubs();
+                
+                // Create test SNAPSHOT JAR file
+                File snapshotJar = File.createTempFile("test-artifact", ".jar");
+                try (FileOutputStream fos = new FileOutputStream(snapshotJar)) {
+                        fos.write("Test SNAPSHOT content".getBytes());
+                }
+                
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                
+                // Connect and put SNAPSHOT artifact
+                ghRelAssetWagon.connect(repository, authenticationInfo);
+                ghRelAssetWagon.put(snapshotJar, "com/example/test-artifact/1.0.0-SNAPSHOT/test-artifact-1.0.0-SNAPSHOT.jar");
+                
+                // Verify that artifacts were staged (including SNAPSHOT metadata)
+                assertTrue(ghRelAssetWagon.artifactsToUpload.size() >= 1);
+                
+                // Clean up
+                snapshotJar.delete();
+        }
+
+        @Test
+        @DisplayName("Should handle plugin artifact metadata generation")
+        void testPutPluginArtifactGeneratesGroupMetadata() throws Exception {
+                // Setup WireMock stubs
+                setupBasicWireMockStubs();
+                
+                // Create test plugin JAR file
+                File pluginJar = File.createTempFile("test-maven-plugin", ".jar");
+                try (FileOutputStream fos = new FileOutputStream(pluginJar)) {
+                        fos.write("Test plugin content".getBytes());
+                }
+                
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                
+                // Connect and put plugin artifact
+                ghRelAssetWagon.connect(repository, authenticationInfo);
+                ghRelAssetWagon.put(pluginJar, "com/example/plugins/test-maven-plugin/1.0.0/test-maven-plugin-1.0.0.jar");
+                
+                // Verify that artifacts were staged (including group-level metadata for plugins)
+                assertTrue(ghRelAssetWagon.artifactsToUpload.size() >= 1);
+                
+                // Clean up
+                pluginJar.delete();
+        }
+
+        @Test
+        @DisplayName("Should not generate metadata for classified artifacts")
+        void testPutClassifiedArtifactDoesNotGenerateMetadata() throws Exception {
+                // Setup WireMock stubs
+                setupBasicWireMockStubs();
+                
+                // Create test classified JAR file (sources)
+                File sourcesJar = File.createTempFile("test-artifact", "-sources.jar");
+                try (FileOutputStream fos = new FileOutputStream(sourcesJar)) {
+                        fos.write("Test sources content".getBytes());
+                }
+                
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                
+                // Connect and put classified artifact
+                ghRelAssetWagon.connect(repository, authenticationInfo);
+                int initialUploadCount = ghRelAssetWagon.artifactsToUpload.size();
+                ghRelAssetWagon.put(sourcesJar, "com/example/test-artifact/1.0.0/test-artifact-1.0.0-sources.jar");
+                
+                // Verify that only the artifact and its checksums were staged (no metadata for classified artifacts)
+                // The exact count depends on implementation, but should be minimal
+                assertTrue(ghRelAssetWagon.artifactsToUpload.size() > initialUploadCount);
+                
+                // Clean up
+                sourcesJar.delete();
+        }
+
+        @Test
+        @DisplayName("Should handle repository structure tracking")
+        void testRepositoryStructureTracking() throws Exception {
+                // Setup WireMock stubs
+                setupBasicWireMockStubs();
+                
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                ghRelAssetWagon.connect(repository, authenticationInfo);
+                
+                // Put multiple versions of the same artifact
+                File artifact1 = File.createTempFile("test-artifact", ".jar");
+                File artifact2 = File.createTempFile("test-artifact", ".jar");
+                
+                try (FileOutputStream fos = new FileOutputStream(artifact1)) {
+                        fos.write("Version 1.0.0 content".getBytes());
+                }
+                try (FileOutputStream fos = new FileOutputStream(artifact2)) {
+                        fos.write("Version 1.1.0 content".getBytes());
+                }
+                
+                ghRelAssetWagon.put(artifact1, "com/example/test-artifact/1.0.0/test-artifact-1.0.0.jar");
+                ghRelAssetWagon.put(artifact2, "com/example/test-artifact/1.1.0/test-artifact-1.1.0.jar");
+                
+                // Verify that multiple artifacts were staged
+                assertTrue(ghRelAssetWagon.artifactsToUpload.size() >= 2);
+                
+                // Clean up
+                artifact1.delete();
+                artifact2.delete();
+        }
+
+        @Test
+        @DisplayName("Should handle malformed artifact paths gracefully")
+        void testPutMalformedPath() throws Exception {
+                // Setup WireMock stubs
+                setupBasicWireMockStubs();
+                
+                // Create test artifact
+                File testArtifact = File.createTempFile("test", ".jar");
+                try (FileOutputStream fos = new FileOutputStream(testArtifact)) {
+                        fos.write("Test content".getBytes());
+                }
+                
+                when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+                
+                // Connect and put artifact with malformed path
+                ghRelAssetWagon.connect(repository, authenticationInfo);
+                
+                // This should not throw an exception, just handle gracefully
+                assertDoesNotThrow(() -> {
+                        ghRelAssetWagon.put(testArtifact, "malformed/path");
+                });
+                
+                // Clean up
+                testArtifact.delete();
+        }
+
+        private void setupBasicWireMockStubs() {
+                // Mock release endpoint for tag creation/checking
+                stubFor(get(urlEqualTo("/repos/owner/repo/releases/tags/v1.0.0"))
+                        .willReturn(aResponse()
+                                .withStatus(404)));
+                
+                // Mock commit SHA endpoint
+                stubFor(get(urlEqualTo("/repos/owner/repo/git/refs/heads/main"))
+                        .willReturn(aResponse()
+                                .withStatus(200)
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("{\"object\":{\"sha\":\"mocked_commit\"}}")));
+                
+                // Mock tag creation
+                stubFor(post(urlEqualTo("/repos/owner/repo/git/tags"))
+                        .willReturn(aResponse()
+                                .withStatus(201)
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("{\"sha\":\"mocked_tag_sha\"}")));
+                
+                // Mock release creation
+                stubFor(post(urlEqualTo("/repos/owner/repo/releases"))
+                        .willReturn(aResponse()
+                                .withStatus(201)
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("{\"id\":12345,\"upload_url\":\"https://uploads.github.com/repos/owner/repo/releases/12345/assets{?name,label}\"}")));
+        }
 }

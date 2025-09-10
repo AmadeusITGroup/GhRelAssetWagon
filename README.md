@@ -81,6 +81,20 @@ GhRelAssetWagon
 
 - `README.md`: This file contains the documentation and information about the project.
 
+## Features
+
+- **GitHub Release Asset Repository**: Use GitHub release assets as a Maven repository
+- **Seamless Integration**: Works with standard Maven commands (`mvn deploy`, `mvn install`)
+- **Authentication**: Secure access using GitHub Personal Access Tokens
+- **Local Caching**: Efficient ZIP-based caching in `~/.ghrelasset/repos/`
+- **Cross-Platform**: Compatible with all platforms supporting Java 8+
+- **Enhanced Wagon Interface Support**: 
+  - **File Listing**: List all artifacts in a release (`getFileList()`)
+  - **Resource Existence Checking**: Verify if artifacts exist before download (`resourceExists()`)
+  - **Directory Upload**: Upload entire directories as individual release assets (`putDirectory()`)
+  - **Conditional Downloads**: Download only if remote files are newer (`getIfNewer()`)
+  - **Directory Copy Support**: Full support for directory-based operations (`supportsDirectoryCopy()`)
+
 ## Usage
 
 The GhRelAssetWagon project can be used to integrate GitHub Release Assets as a Maven repository. This section provides instructions on how to publish and consume artifacts from GitHub Release Assets using the GhRelAssetWagon extension.
