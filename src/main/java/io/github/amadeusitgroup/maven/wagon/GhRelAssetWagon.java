@@ -15,6 +15,10 @@ import java.io.IOException;
 import java.security.MessageDigest;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Set;
+import java.util.HashSet;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -29,6 +33,8 @@ import javax.xml.bind.DatatypeConverter;
 
 import java.net.HttpURLConnection;
 import java.io.InputStream;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -46,7 +52,22 @@ public class GhRelAssetWagon extends AbstractWagon {
     /**
      * The list of artifacts to upload.
      */
-    private List<String> artifactsToUpload = new ArrayList<String>();
+    List<String> artifactsToUpload = new ArrayList<String>();
+
+    /**
+     * Handler for Maven metadata generation and management.
+     */
+    private final MavenMetadataHandler metadataHandler = new MavenMetadataHandler();
+
+    /**
+     * Handler for checksum generation and validation.
+     */
+    private final ChecksumHandler checksumHandler = new ChecksumHandler();
+
+    /**
+     * Cache for tracking uploaded artifacts and their metadata.
+     */
+    private final Map<String, Set<String>> repositoryStructure = new HashMap<>();
 
     /**
      * The base URL for the GitHub API.
@@ -781,45 +802,350 @@ public class GhRelAssetWagon extends AbstractWagon {
     public boolean getIfNewer(String resourceName, File destination, long timestamp)
             throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
         System.out.println(
-                "GhRelAssetWagon: getIfNewer" + resourceName + " to " + destination + " timestamp " + timestamp);
-        return false;
+                "GhRelAssetWagon: getIfNewer " + resourceName + " to " + destination + " timestamp " + timestamp);
+        
+        try {
+            // Parse repository and tag from URL
+            String repoUrl = this.getRepository().getUrl();
+            // Handle both ghrelasset:// and regular URL formats
+            if (repoUrl.startsWith("ghrelasset://")) {
+                repoUrl = repoUrl.substring("ghrelasset://".length());
+            }
+            String[] urlParts = repoUrl.split("/");
+            if (urlParts.length < 3) {
+                throw new TransferFailedException("Invalid repository URL format");
+            }
+            
+            String repository = urlParts[0] + "/" + urlParts[1];
+            String tag = urlParts[2];
+            String assetName = resourceName.substring(resourceName.lastIndexOf("/") + 1);
+            
+            // Get release information to check asset timestamp
+            String releaseId;
+            try {
+                releaseId = getReleaseId(repository, tag);
+            } catch (IOException e) {
+                System.out.println("GhRelAssetWagon: Release not found for tag: " + tag + " - " + e.getMessage());
+                return false; // Release doesn't exist
+            }
+            if (releaseId == null) {
+                return false; // Release doesn't exist
+            }
+            
+            // Get asset information including timestamp
+            URL url = new URL(apiEndpoint + "/repos/" + repository + "/releases/" + releaseId + "/assets");
+            HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
+            urlConnection.setRequestProperty("Accept", "application/vnd.github+json");
+            urlConnection.setRequestProperty("Authorization", "Bearer " + this.authenticationInfo.getPassword());
+            urlConnection.setRequestProperty("X-GitHub-Api-Version", "2022-11-28");
+            urlConnection.setRequestMethod("GET");
+            urlConnection.connect();
+            
+            int responseCode = urlConnection.getResponseCode();
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                InputStream inputStream = urlConnection.getInputStream();
+                ObjectMapper objectMapper = new ObjectMapper();
+                JsonNode rootNode = objectMapper.readTree(inputStream.readAllBytes());
+                
+                for (JsonNode assetNode : rootNode) {
+                    JsonNode nameNode = assetNode.path("name");
+                    if (nameNode.asText().equals(assetName)) {
+                        JsonNode updatedAtNode = assetNode.path("updated_at");
+                        String updatedAtStr = updatedAtNode.asText();
+                        
+                        try {
+                            Instant assetTimestamp = Instant.parse(updatedAtStr);
+                            long assetTimestampMillis = assetTimestamp.toEpochMilli();
+                            
+                            if (assetTimestampMillis > timestamp) {
+                                // Asset is newer, download it
+                                get(resourceName, destination);
+                                return true;
+                            } else {
+                                // Asset is older or same age
+                                return false;
+                            }
+                        } catch (DateTimeParseException e) {
+                            System.err.println("GhRelAssetWagon: Failed to parse asset timestamp: " + updatedAtStr);
+                            // If we can't parse timestamp, fall back to regular get
+                            get(resourceName, destination);
+                            return true;
+                        }
+                    }
+                }
+            }
+            
+            return false; // Asset not found
+            
+        } catch (IOException e) {
+            throw new TransferFailedException("Failed to check resource timestamp: " + e.getMessage(), e);
+        } catch (Exception e) {
+            throw new TransferFailedException("Unexpected error during getIfNewer: " + e.getMessage(), e);
+        }
+    }
+
+
+    /**
+     * Generates and stages checksum files for an artifact.
+     * 
+     * @param source The source file to generate checksums for
+     * @param destination The destination path in the repository
+     * @throws IOException If checksum generation fails
+     */
+    private void generateAndStageChecksums(File source, String destination) throws IOException {
+        Map<String, String> checksums = checksumHandler.generateChecksums(source);
+        
+        for (Map.Entry<String, String> entry : checksums.entrySet()) {
+            String algorithm = entry.getKey();
+            String checksum = entry.getValue();
+            String extension = checksumHandler.getChecksumFileExtension(algorithm);
+            
+            // Create temporary checksum file
+            File checksumFile = File.createTempFile("checksum-" + algorithm, "." + extension);
+            try (FileOutputStream fos = new FileOutputStream(checksumFile)) {
+                fos.write(checksum.getBytes());
+            }
+            
+            // Stage the checksum file
+            String checksumDestination = destination + "." + extension;
+            stageArtifact(checksumFile, checksumDestination);
+            
+            // Clean up temporary file
+            checksumFile.delete();
+        }
     }
 
     /**
-     * Uploads a file to the specified destination.
-     *
-     * @param source      The file to be uploaded.
-     * @param destination The destination path where the file will be uploaded.
-     * @throws TransferFailedException       If the transfer fails.
-     * @throws ResourceDoesNotExistException If the resource does not exist.
-     * @throws AuthorizationException        If the user is not authorized to
-     *                                       perform the operation.
+     * Stages an artifact for upload by adding it to the local ZIP cache.
+     * 
+     * @param source The source file to stage
+     * @param destination The destination path in the repository
+     * @throws IOException If staging fails
      */
-    @Override
-    public void put(File source, String destination)
-            throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
-        System.out.println("GhRelAssetWagon: put " + source + " to " + destination);
-
+    private void stageArtifact(File source, String destination) throws IOException {
         String releaseName = this.getRepository().getUrl().substring(0, this.getRepository().getUrl().lastIndexOf("/"));
         String tagName = this.getRepository().getUrl().substring(this.getRepository().getUrl().lastIndexOf("/") + 1);
 
-        System.out.println("GhRelAssetWagon: put - releaseName: " + releaseName);
-        System.out.println("GhRelAssetWagon: put - tagName: " + tagName);
+        System.out.println("GhRelAssetWagon: stageArtifact - releaseName: " + releaseName);
+        System.out.println("GhRelAssetWagon: stageArtifact - tagName: " + tagName);
 
-        String sha1;
         try {
-            sha1 = getSHA1(this.getRepository().getUrl().toString());
-            File zipRepo = new File(System.getProperty("user.home") + "/.ghrelasset/repos/" + sha1);
-            System.out.println("GhRelAssetWagon: put - repo: " + zipRepo);
-            System.out.println("GhRelAssetWagon: get - repo exists");
+            String sha1 = getSHA1(this.getRepository().getUrl().toString());
+            File repoDir = new File(System.getProperty("user.home") + "/.ghrelasset/repos/");
+            if (!repoDir.exists()) {
+                repoDir.mkdirs();
+            }
+            File zipRepo = new File(repoDir, sha1);
+            System.out.println("GhRelAssetWagon: stageArtifact - repo: " + zipRepo);
 
             addResourceToZip(zipRepo.getAbsolutePath(), source.toString(), destination);
             this.artifactsToUpload.add(source.toString());
 
         } catch (Exception e) {
-            e.printStackTrace();
+            throw new IOException("Failed to stage artifact", e);
         }
+    }
 
+    /**
+     * Updates the repository structure tracking for metadata generation.
+     * 
+     * @param destination The artifact destination path
+     */
+    private void updateRepositoryStructure(String destination) {
+        // Parse the Maven coordinates from the destination path
+        // Format: groupId/artifactId/version/artifact-version.extension
+        String[] pathParts = destination.split("/");
+        if (pathParts.length >= 3) {
+            String version = pathParts[pathParts.length - 2];
+            String artifactId = pathParts[pathParts.length - 3];
+            
+            // Build group ID from remaining path parts
+            StringBuilder groupIdBuilder = new StringBuilder();
+            for (int i = 0; i < pathParts.length - 3; i++) {
+                if (i > 0) groupIdBuilder.append(".");
+                groupIdBuilder.append(pathParts[i]);
+            }
+            String groupId = groupIdBuilder.toString();
+            
+            // Track the structure
+            String groupKey = "group:" + groupId;
+            String artifactKey = "artifact:" + groupId + ":" + artifactId;
+            
+            repositoryStructure.computeIfAbsent(groupKey, k -> new HashSet<>()).add(artifactId);
+            repositoryStructure.computeIfAbsent(artifactKey, k -> new HashSet<>()).add(version);
+        }
+    }
+
+    /**
+     * Determines if a destination path represents a main artifact (not a classifier).
+     * 
+     * @param destination The destination path
+     * @return true if this is a main artifact, false otherwise
+     */
+    private boolean isMainArtifact(String destination) {
+        String filename = destination.substring(destination.lastIndexOf("/") + 1);
+        
+        // Skip checksum files
+        if (checksumHandler.isChecksumFile(filename)) {
+            return false;
+        }
+        
+        // Main artifacts typically follow the pattern: artifactId-version.extension
+        // Classified artifacts follow: artifactId-version-classifier.extension
+        String[] pathParts = destination.split("/");
+        if (pathParts.length >= 3) {
+            String version = pathParts[pathParts.length - 2];
+            String artifactId = pathParts[pathParts.length - 3];
+            
+            String expectedPrefix = artifactId + "-" + version;
+            String nameWithoutExt = filename.contains(".") ? 
+                filename.substring(0, filename.lastIndexOf(".")) : filename;
+            
+            // Main artifact if the name matches exactly artifactId-version
+            return nameWithoutExt.equals(expectedPrefix);
+        }
+        
+        return false;
+    }
+
+    /**
+     * Generates Maven metadata files for the given artifact destination.
+     * 
+     * @param destination The artifact destination path
+     * @throws IOException If metadata generation fails
+     */
+    private void generateMavenMetadata(String destination) throws IOException {
+        // First validate if this is a valid Maven artifact path
+        RepositoryValidator.ValidationResult validation = RepositoryValidator.validateRepositoryPath(destination);
+        if (!validation.isValid()) {
+            // Skip metadata generation for non-Maven paths
+            System.out.println("GhRelAssetWagon: Skipping metadata generation for non-Maven path: " + destination);
+            return;
+        }
+        
+        // Extract coordinates using the validator
+        RepositoryValidator.MavenCoordinates coordinates = RepositoryValidator.extractCoordinates(destination);
+        if (coordinates == null) {
+            System.out.println("GhRelAssetWagon: Could not extract coordinates from path: " + destination);
+            return;
+        }
+        
+        String groupId = coordinates.getGroupId();
+        String artifactId = coordinates.getArtifactId();
+        String version = coordinates.getVersion();
+        
+        // Generate artifact-level metadata
+        generateArtifactLevelMetadata(groupId, artifactId);
+        
+        // Generate group-level metadata if this is a plugin
+        if (isPluginArtifact(destination)) {
+            generateGroupLevelMetadata(groupId, artifactId);
+        }
+        
+        // Generate version-level metadata for SNAPSHOT versions
+        if (version.endsWith("-SNAPSHOT")) {
+            generateVersionLevelMetadata(groupId, artifactId, version);
+        }
+    }
+
+    /**
+     * Generates artifact-level Maven metadata.
+     * 
+     * @param groupId The group ID
+     * @param artifactId The artifact ID
+     * @throws IOException If metadata generation fails
+     */
+    private void generateArtifactLevelMetadata(String groupId, String artifactId) throws IOException {
+        String artifactKey = "artifact:" + groupId + ":" + artifactId;
+        Set<String> versions = repositoryStructure.get(artifactKey);
+        
+        if (versions != null && !versions.isEmpty()) {
+            String metadataXml = metadataHandler.generateArtifactMetadata(groupId, artifactId, new ArrayList<>(versions));
+            
+            // Stage the metadata file
+            String metadataPath = groupId.replace(".", "/") + "/" + artifactId + "/maven-metadata.xml";
+            File tempMetadataFile = File.createTempFile("maven-metadata", ".xml");
+            
+            try (FileOutputStream fos = new FileOutputStream(tempMetadataFile)) {
+                fos.write(metadataXml.getBytes());
+            }
+            
+            stageArtifact(tempMetadataFile, metadataPath);
+            tempMetadataFile.delete();
+        }
+    }
+
+    /**
+     * Generates group-level Maven metadata for plugins.
+     * 
+     * @param groupId The group ID
+     * @param artifactId The artifact ID
+     * @throws IOException If metadata generation fails
+     */
+    private void generateGroupLevelMetadata(String groupId, String artifactId) throws IOException {
+        // For simplicity, assume plugin prefix is the artifactId without "-maven-plugin" suffix
+        String prefix = artifactId.replace("-maven-plugin", "").replace("maven-", "");
+        
+        List<MavenMetadataHandler.PluginInfo> plugins = new ArrayList<>();
+        plugins.add(new MavenMetadataHandler.PluginInfo(artifactId, prefix, artifactId));
+        
+        String metadataXml = metadataHandler.generateGroupMetadata(groupId, plugins);
+        
+        // Stage the group-level metadata file
+        String metadataPath = groupId.replace(".", "/") + "/maven-metadata.xml";
+        File tempMetadataFile = File.createTempFile("maven-metadata-group", ".xml");
+        
+        try (FileOutputStream fos = new FileOutputStream(tempMetadataFile)) {
+            fos.write(metadataXml.getBytes());
+        }
+        
+        stageArtifact(tempMetadataFile, metadataPath);
+        tempMetadataFile.delete();
+    }
+
+    /**
+     * Generates version-level Maven metadata for SNAPSHOT versions.
+     * 
+     * @param groupId The group ID
+     * @param artifactId The artifact ID
+     * @param version The SNAPSHOT version
+     * @throws IOException If metadata generation fails
+     */
+    private void generateVersionLevelMetadata(String groupId, String artifactId, String version) throws IOException {
+        // Generate snapshot version info
+        String timestamp = new java.text.SimpleDateFormat("yyyyMMdd.HHmmss").format(new java.util.Date());
+        int buildNumber = 1; // In a real implementation, this would be incremented
+        
+        List<MavenMetadataHandler.SnapshotVersionInfo> snapshotVersions = new ArrayList<>();
+        snapshotVersions.add(new MavenMetadataHandler.SnapshotVersionInfo(
+            null, "jar", version.replace("-SNAPSHOT", "-" + timestamp + "-" + buildNumber),
+            timestamp.replace(".", ""), timestamp, buildNumber));
+        snapshotVersions.add(new MavenMetadataHandler.SnapshotVersionInfo(
+            null, "pom", version.replace("-SNAPSHOT", "-" + timestamp + "-" + buildNumber),
+            timestamp.replace(".", ""), timestamp, buildNumber));
+        
+        String metadataXml = metadataHandler.generateVersionMetadata(groupId, artifactId, version, snapshotVersions);
+        
+        // Stage the version-level metadata file
+        String metadataPath = groupId.replace(".", "/") + "/" + artifactId + "/" + version + "/maven-metadata.xml";
+        File tempMetadataFile = File.createTempFile("maven-metadata-version", ".xml");
+        
+        try (FileOutputStream fos = new FileOutputStream(tempMetadataFile)) {
+            fos.write(metadataXml.getBytes());
+        }
+        
+        stageArtifact(tempMetadataFile, metadataPath);
+        tempMetadataFile.delete();
+    }
+
+    /**
+     * Determines if an artifact is a Maven plugin based on its path.
+     * 
+     * @param destination The artifact destination path
+     * @return true if this appears to be a plugin artifact
+     */
+    private boolean isPluginArtifact(String destination) {
+        return destination.contains("maven-plugin") || destination.contains("-plugin");
     }
 
     /**
@@ -904,6 +1230,312 @@ public class GhRelAssetWagon extends AbstractWagon {
 
     void setAuthenticationInfo(AuthenticationInfo authenticationInfo) {
         this.authenticationInfo = authenticationInfo;
+    }
+
+    // ========== Phase 1 Enhancement - Missing Wagon Interface Methods ==========
+
+    /**
+     * Lists all files in the specified directory path within the GitHub release assets.
+     * This method retrieves the list of assets from a GitHub release and filters them
+     * based on the directory path provided.
+     *
+     * @param destinationDirectory the directory path to list files from
+     * @return a list of file names in the specified directory, or empty list if none found
+     * @throws TransferFailedException       if the transfer fails
+     * @throws ResourceDoesNotExistException if the specified directory does not exist
+     * @throws AuthorizationException        if the user is not authorized to access the resource
+     */
+    @Override
+    public List<String> getFileList(String destinationDirectory)
+            throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
+        System.out.println("GhRelAssetWagon: getFileList for directory: " + destinationDirectory);
+        
+        List<String> fileList = new ArrayList<>();
+        
+        try {
+            // Parse repository and tag from URL
+            String repoUrl = this.getRepository().getUrl();
+            // Handle both ghrelasset:// and regular URL formats
+            if (repoUrl.startsWith("ghrelasset://")) {
+                repoUrl = repoUrl.substring("ghrelasset://".length());
+            }
+            String[] urlParts = repoUrl.split("/");
+            if (urlParts.length < 3) {
+                throw new TransferFailedException("Invalid repository URL format");
+            }
+            
+            String repository = urlParts[0] + "/" + urlParts[1];
+            String tag = urlParts[2];
+            
+            // Get release information
+            String releaseId;
+            try {
+                releaseId = getReleaseId(repository, tag);
+            } catch (IOException e) {
+                System.out.println("GhRelAssetWagon: Release not found for tag: " + tag + " - " + e.getMessage());
+                return fileList; // Return empty list if release doesn't exist
+            }
+            if (releaseId == null) {
+                System.out.println("GhRelAssetWagon: Release not found for tag: " + tag);
+                return fileList; // Return empty list if release doesn't exist
+            }
+            
+            // Get assets from the release
+            URL url = new URL(apiEndpoint + "/repos/" + repository + "/releases/" + releaseId + "/assets");
+            HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
+            urlConnection.setRequestProperty("Accept", "application/vnd.github+json");
+            urlConnection.setRequestProperty("Authorization", "Bearer " + this.authenticationInfo.getPassword());
+            urlConnection.setRequestProperty("X-GitHub-Api-Version", "2022-11-28");
+            urlConnection.setRequestMethod("GET");
+            urlConnection.connect();
+            
+            int responseCode = urlConnection.getResponseCode();
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                InputStream inputStream = urlConnection.getInputStream();
+                ObjectMapper objectMapper = new ObjectMapper();
+                JsonNode rootNode = objectMapper.readTree(inputStream.readAllBytes());
+                
+                // Extract file names from assets
+                for (JsonNode assetNode : rootNode) {
+                    JsonNode nameNode = assetNode.path("name");
+                    String assetName = nameNode.asText();
+                    
+                    // For GitHub releases, we treat all assets as being in the same "directory"
+                    // In a more sophisticated implementation, we could parse asset names for directory structure
+                    if (assetName != null && !assetName.isEmpty()) {
+                        fileList.add(assetName);
+                    }
+                }
+                
+                System.out.println("GhRelAssetWagon: Found " + fileList.size() + " files in directory: " + destinationDirectory);
+            } else if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
+                System.out.println("GhRelAssetWagon: Release assets not found for: " + repository + "/" + tag);
+                return fileList; // Return empty list
+            } else {
+                throw new TransferFailedException("Failed to retrieve file list. HTTP response code: " + responseCode);
+            }
+            
+        } catch (IOException e) {
+            throw new TransferFailedException("Failed to retrieve file list: " + e.getMessage(), e);
+        } catch (Exception e) {
+            throw new TransferFailedException("Unexpected error during getFileList: " + e.getMessage(), e);
+        }
+        
+        return fileList;
+    }
+
+    /**
+     * Checks if a resource exists in the GitHub release assets.
+     * This method queries the GitHub API to determine if the specified resource
+     * exists as an asset in the release.
+     *
+     * @param resourceName the name of the resource to check
+     * @return true if the resource exists, false otherwise
+     * @throws TransferFailedException    if the transfer fails
+     * @throws AuthorizationException     if the user is not authorized to access the resource
+     */
+    @Override
+    public boolean resourceExists(String resourceName)
+            throws TransferFailedException, AuthorizationException {
+        System.out.println("GhRelAssetWagon: Checking if resource exists: " + resourceName);
+        
+        try {
+            // Parse repository and tag from URL
+            String repoUrl = this.getRepository().getUrl();
+            // Handle both ghrelasset:// and regular URL formats
+            if (repoUrl.startsWith("ghrelasset://")) {
+                repoUrl = repoUrl.substring("ghrelasset://".length());
+            }
+            String[] urlParts = repoUrl.split("/");
+            if (urlParts.length < 3) {
+                throw new TransferFailedException("Invalid repository URL format");
+            }
+            
+            String repository = urlParts[0] + "/" + urlParts[1];
+            String tag = urlParts[2];
+            String assetName = resourceName.substring(resourceName.lastIndexOf("/") + 1);
+            
+            // Get release information
+            String releaseId;
+            try {
+                releaseId = getReleaseId(repository, tag);
+            } catch (IOException e) {
+                System.out.println("GhRelAssetWagon: Release not found for tag: " + tag + " - " + e.getMessage());
+                return false; // Release doesn't exist
+            }
+            if (releaseId == null) {
+                System.out.println("GhRelAssetWagon: Release not found for tag: " + tag);
+                return false; // Release doesn't exist
+            }
+            
+            // Check if asset exists in the release
+            URL url = new URL(apiEndpoint + "/repos/" + repository + "/releases/" + releaseId + "/assets");
+            HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
+            urlConnection.setRequestProperty("Accept", "application/vnd.github+json");
+            urlConnection.setRequestProperty("Authorization", "Bearer " + this.authenticationInfo.getPassword());
+            urlConnection.setRequestProperty("X-GitHub-Api-Version", "2022-11-28");
+            urlConnection.setRequestMethod("GET");
+            urlConnection.connect();
+            
+            int responseCode = urlConnection.getResponseCode();
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                InputStream inputStream = urlConnection.getInputStream();
+                ObjectMapper objectMapper = new ObjectMapper();
+                JsonNode rootNode = objectMapper.readTree(inputStream.readAllBytes());
+                
+                // Search for the asset by name
+                for (JsonNode assetNode : rootNode) {
+                    JsonNode nameNode = assetNode.path("name");
+                    if (nameNode.asText().equals(assetName)) {
+                        System.out.println("GhRelAssetWagon: Resource exists: " + resourceName);
+                        return true;
+                    }
+                }
+                
+                System.out.println("GhRelAssetWagon: Resource not found: " + resourceName);
+                return false;
+            } else if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
+                System.out.println("GhRelAssetWagon: Release not found, resource does not exist: " + resourceName);
+                return false;
+            } else {
+                throw new TransferFailedException("Failed to check resource existence. HTTP response code: " + responseCode);
+            }
+            
+        } catch (IOException e) {
+            throw new TransferFailedException("Failed to check resource existence: " + e.getMessage(), e);
+        } catch (Exception e) {
+            throw new TransferFailedException("Unexpected error during resourceExists: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Uploads a directory and its contents to the GitHub release.
+     * This method recursively processes all files in the source directory
+     * and uploads them as individual assets to the GitHub release.
+     *
+     * @param sourceDirectory      the source directory to upload
+     * @param destinationDirectory the destination directory path (used as prefix for asset names)
+     * @throws TransferFailedException       if the transfer fails
+     * @throws ResourceDoesNotExistException if the source directory does not exist
+     * @throws AuthorizationException        if the user is not authorized to perform the operation
+     */
+    @Override
+    public void putDirectory(File sourceDirectory, String destinationDirectory)
+            throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
+        System.out.println("GhRelAssetWagon: putDirectory from " + sourceDirectory + " to " + destinationDirectory);
+        
+        if (!sourceDirectory.exists()) {
+            throw new ResourceDoesNotExistException("Source directory does not exist: " + sourceDirectory);
+        }
+        
+        if (!sourceDirectory.isDirectory()) {
+            throw new TransferFailedException("Source is not a directory: " + sourceDirectory);
+        }
+        
+        try {
+            // Recursively upload all files in the directory
+            uploadDirectoryRecursively(sourceDirectory, destinationDirectory, "");
+            
+        } catch (Exception e) {
+            throw new TransferFailedException("Failed to upload directory: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Helper method to recursively upload directory contents.
+     *
+     * @param currentDir           the current directory being processed
+     * @param destinationDirectory the base destination directory
+     * @param relativePath         the relative path from the source directory root
+     * @throws Exception if an error occurs during upload
+     */
+    private void uploadDirectoryRecursively(File currentDir, String destinationDirectory, String relativePath) throws Exception {
+        File[] files = currentDir.listFiles();
+        if (files == null) {
+            return; // Empty directory or not accessible
+        }
+        
+        for (File file : files) {
+            String currentRelativePath = relativePath.isEmpty() ? file.getName() : relativePath + "/" + file.getName();
+            String destinationPath = destinationDirectory + currentRelativePath;
+            
+            if (file.isDirectory()) {
+                // Recursively process subdirectory
+                uploadDirectoryRecursively(file, destinationDirectory, currentRelativePath);
+            } else {
+                // Upload individual file
+                System.out.println("GhRelAssetWagon: Uploading file: " + file + " to " + destinationPath);
+                put(file, destinationPath);
+            }
+        }
+    }
+
+    /**
+     * Uploads a file to the specified destination.
+     *
+     * @param source      The file to be uploaded.
+     * @param destination The destination path where the file will be uploaded.
+     * @throws TransferFailedException If the transfer fails.
+     */
+    @Override
+    public void put(File source, String destination) throws TransferFailedException {
+        System.out.println("GhRelAssetWagon: put " + source.getAbsolutePath() + " to " + destination);
+        
+        try {
+            // Validate repository path structure
+            RepositoryValidator.ValidationResult validation = RepositoryValidator.validateRepositoryPath(destination);
+            if (!validation.isValid()) {
+                System.out.println("GhRelAssetWagon: Repository path validation failed: " + validation.getMessage());
+                // Log warning but continue - some legacy paths might not be perfectly compliant
+            }
+            
+            // Check if this is a checksum file - don't generate checksums for checksum files
+            boolean isChecksumFile = destination.endsWith(".md5") || destination.endsWith(".sha1") || 
+                                   destination.endsWith(".sha256") || destination.endsWith(".asc");
+            
+            if (!isChecksumFile) {
+                // Generate checksums for the source file
+                try {
+                    generateAndStageChecksums(source, destination);
+                } catch (Exception e) {
+                    // Log warning but don't fail the upload for checksum generation issues
+                    System.out.println("GhRelAssetWagon: Warning - Failed to generate checksums for " + destination + ": " + e.getMessage());
+                }
+            }
+            
+            // Stage the main artifact
+            stageArtifact(source, destination);
+            
+            // Update repository structure tracking
+            updateRepositoryStructure(destination);
+            
+            // Generate Maven metadata if applicable (but not for checksum files)
+            if (!isChecksumFile) {
+                try {
+                    generateMavenMetadata(destination);
+                } catch (Exception e) {
+                    // Log warning but don't fail the upload for metadata generation issues
+                    System.out.println("GhRelAssetWagon: Warning - Failed to generate metadata for " + destination + ": " + e.getMessage());
+                }
+            }
+            
+        } catch (IOException e) {
+            throw new TransferFailedException("Failed to upload artifact: " + e.getMessage(), e);
+        } catch (Exception e) {
+            throw new TransferFailedException("Unexpected error during put: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Indicates whether this wagon supports directory copy operations.
+     * The GhRelAssetWagon supports directory operations by uploading
+     * individual files as separate GitHub release assets.
+     *
+     * @return true, indicating that directory copy is supported
+     */
+    @Override
+    public boolean supportsDirectoryCopy() {
+        return true;
     }
 
 }

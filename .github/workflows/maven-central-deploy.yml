@@ -45,7 +45,7 @@ jobs:
         chmod 700 ~/.gnupg
         
         # Import the GPG key
-        echo "$GPG_PRIVATE_KEY" | gpg --dearmor --batch --yes --import
+        echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --import
         
         # List keys to verify import and get key ID
         echo "Imported GPG keys:"
@@ -74,6 +74,8 @@ jobs:
         git config user.email "actions@github.com"
         
     - name: Run tests
+      env:
+        GH_RELEASE_ASSET_TOKEN: test_token
       run: mvn clean test
       
     - name: Verify build

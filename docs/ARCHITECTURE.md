@@ -4,6 +4,23 @@
 
 GhRelAssetWagon is a Maven Wagon provider extension that enables GitHub Release Assets to be used as a Maven repository. It extends Apache Maven's `AbstractWagon` class to support the `ghrelasset://` protocol scheme, allowing Maven projects to publish and consume artifacts directly from GitHub releases.
 
+## Core Methods
+
+The wagon implements the essential AbstractWagon methods:
+
+### Basic Operations
+- `get(String, File)` - Downloads artifacts from GitHub release assets
+- `put(File, String)` - Stages artifacts for upload to GitHub releases
+- `openConnectionInternal()` - Establishes authentication and downloads repository cache
+- `closeConnection()` - Uploads staged artifacts to GitHub release
+
+### Enhanced Wagon Interface Methods (Phase 1)
+- `getFileList(String)` - Lists all files in a GitHub release directory
+- `resourceExists(String)` - Checks if a specific resource exists in the release
+- `putDirectory(File, String)` - Uploads entire directories as individual release assets
+- `getIfNewer(String, File, long)` - Downloads files only if they are newer than the specified timestamp
+- `supportsDirectoryCopy()` - Returns true, indicating support for directory operations.
+
 ## Project Information
 
 - **Organization**: Amadeus IT Group
