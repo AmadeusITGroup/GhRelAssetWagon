@@ -58,16 +58,29 @@ jobs:
         echo "GPG_KEY_ID=$KEY_ID" >> $GITHUB_ENV
         
         # Configure GPG for non-interactive use
+        mkdir -p ~/.gnupg
+        chmod 700 ~/.gnupg
         echo "use-agent" >> ~/.gnupg/gpg.conf
         echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
-        echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+        echo "batch" >> ~/.gnupg/gpg.conf
+        echo "no-tty" >> ~/.gnupg/gpg.conf
         echo "default-key $KEY_ID" >> ~/.gnupg/gpg.conf
         
-        # Restart GPG agent
-        gpg-connect-agent reloadagent /bye
+        # Configure GPG agent
+        echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+        echo "default-cache-ttl 86400" >> ~/.gnupg/gpg-agent.conf
+        echo "max-cache-ttl 86400" >> ~/.gnupg/gpg-agent.conf
         
-        # Test signing
-        echo "test" | gpg --clearsign --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE"
+        # Set proper permissions
+        chmod 600 ~/.gnupg/gpg.conf
+        chmod 600 ~/.gnupg/gpg-agent.conf
+        
+        # Restart GPG agent
+        gpg-connect-agent reloadagent /bye || true
+        
+        # Test signing with the exact same parameters Maven will use
+        echo "test" | gpg --detach-sign --armor --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" --default-key "$KEY_ID" --output /tmp/test.asc
+        echo "GPG signing test successful"
         
     - name: Configure Git
       run: |
