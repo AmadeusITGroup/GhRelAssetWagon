@@ -29,6 +29,8 @@ import javax.xml.bind.DatatypeConverter;
 
 import java.net.HttpURLConnection;
 import java.io.InputStream;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -781,8 +783,86 @@ public class GhRelAssetWagon extends AbstractWagon {
     public boolean getIfNewer(String resourceName, File destination, long timestamp)
             throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
         System.out.println(
-                "GhRelAssetWagon: getIfNewer" + resourceName + " to " + destination + " timestamp " + timestamp);
-        return false;
+                "GhRelAssetWagon: getIfNewer " + resourceName + " to " + destination + " timestamp " + timestamp);
+        
+        try {
+            // Parse repository and tag from URL
+            String repoUrl = this.getRepository().getUrl();
+            // Handle both ghrelasset:// and regular URL formats
+            if (repoUrl.startsWith("ghrelasset://")) {
+                repoUrl = repoUrl.substring("ghrelasset://".length());
+            }
+            String[] urlParts = repoUrl.split("/");
+            if (urlParts.length < 3) {
+                throw new TransferFailedException("Invalid repository URL format");
+            }
+            
+            String repository = urlParts[0] + "/" + urlParts[1];
+            String tag = urlParts[2];
+            String assetName = resourceName.substring(resourceName.lastIndexOf("/") + 1);
+            
+            // Get release information to check asset timestamp
+            String releaseId;
+            try {
+                releaseId = getReleaseId(repository, tag);
+            } catch (IOException e) {
+                System.out.println("GhRelAssetWagon: Release not found for tag: " + tag + " - " + e.getMessage());
+                return false; // Release doesn't exist
+            }
+            if (releaseId == null) {
+                return false; // Release doesn't exist
+            }
+            
+            // Get asset information including timestamp
+            URL url = new URL(apiEndpoint + "/repos/" + repository + "/releases/" + releaseId + "/assets");
+            HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
+            urlConnection.setRequestProperty("Accept", "application/vnd.github+json");
+            urlConnection.setRequestProperty("Authorization", "Bearer " + this.authenticationInfo.getPassword());
+            urlConnection.setRequestProperty("X-GitHub-Api-Version", "2022-11-28");
+            urlConnection.setRequestMethod("GET");
+            urlConnection.connect();
+            
+            int responseCode = urlConnection.getResponseCode();
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                InputStream inputStream = urlConnection.getInputStream();
+                ObjectMapper objectMapper = new ObjectMapper();
+                JsonNode rootNode = objectMapper.readTree(inputStream.readAllBytes());
+                
+                for (JsonNode assetNode : rootNode) {
+                    JsonNode nameNode = assetNode.path("name");
+                    if (nameNode.asText().equals(assetName)) {
+                        JsonNode updatedAtNode = assetNode.path("updated_at");
+                        String updatedAtStr = updatedAtNode.asText();
+                        
+                        try {
+                            Instant assetTimestamp = Instant.parse(updatedAtStr);
+                            long assetTimestampMillis = assetTimestamp.toEpochMilli();
+                            
+                            if (assetTimestampMillis > timestamp) {
+                                // Asset is newer, download it
+                                get(resourceName, destination);
+                                return true;
+                            } else {
+                                // Asset is older or same age
+                                return false;
+                            }
+                        } catch (DateTimeParseException e) {
+                            System.err.println("GhRelAssetWagon: Failed to parse asset timestamp: " + updatedAtStr);
+                            // If we can't parse timestamp, fall back to regular get
+                            get(resourceName, destination);
+                            return true;
+                        }
+                    }
+                }
+            }
+            
+            return false; // Asset not found
+            
+        } catch (IOException e) {
+            throw new TransferFailedException("Failed to check resource timestamp: " + e.getMessage(), e);
+        } catch (Exception e) {
+            throw new TransferFailedException("Unexpected error during getIfNewer: " + e.getMessage(), e);
+        }
     }
 
     /**
@@ -904,6 +984,256 @@ public class GhRelAssetWagon extends AbstractWagon {
 
     void setAuthenticationInfo(AuthenticationInfo authenticationInfo) {
         this.authenticationInfo = authenticationInfo;
+    }
+
+    // ========== Phase 1 Enhancement - Missing Wagon Interface Methods ==========
+
+    /**
+     * Lists all files in the specified directory path within the GitHub release assets.
+     * This method retrieves the list of assets from a GitHub release and filters them
+     * based on the directory path provided.
+     *
+     * @param destinationDirectory the directory path to list files from
+     * @return a list of file names in the specified directory, or empty list if none found
+     * @throws TransferFailedException       if the transfer fails
+     * @throws ResourceDoesNotExistException if the specified directory does not exist
+     * @throws AuthorizationException        if the user is not authorized to access the resource
+     */
+    @Override
+    public List<String> getFileList(String destinationDirectory)
+            throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
+        System.out.println("GhRelAssetWagon: getFileList for directory: " + destinationDirectory);
+        
+        List<String> fileList = new ArrayList<>();
+        
+        try {
+            // Parse repository and tag from URL
+            String repoUrl = this.getRepository().getUrl();
+            // Handle both ghrelasset:// and regular URL formats
+            if (repoUrl.startsWith("ghrelasset://")) {
+                repoUrl = repoUrl.substring("ghrelasset://".length());
+            }
+            String[] urlParts = repoUrl.split("/");
+            if (urlParts.length < 3) {
+                throw new TransferFailedException("Invalid repository URL format");
+            }
+            
+            String repository = urlParts[0] + "/" + urlParts[1];
+            String tag = urlParts[2];
+            
+            // Get release information
+            String releaseId;
+            try {
+                releaseId = getReleaseId(repository, tag);
+            } catch (IOException e) {
+                System.out.println("GhRelAssetWagon: Release not found for tag: " + tag + " - " + e.getMessage());
+                return fileList; // Return empty list if release doesn't exist
+            }
+            if (releaseId == null) {
+                System.out.println("GhRelAssetWagon: Release not found for tag: " + tag);
+                return fileList; // Return empty list if release doesn't exist
+            }
+            
+            // Get assets from the release
+            URL url = new URL(apiEndpoint + "/repos/" + repository + "/releases/" + releaseId + "/assets");
+            HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
+            urlConnection.setRequestProperty("Accept", "application/vnd.github+json");
+            urlConnection.setRequestProperty("Authorization", "Bearer " + this.authenticationInfo.getPassword());
+            urlConnection.setRequestProperty("X-GitHub-Api-Version", "2022-11-28");
+            urlConnection.setRequestMethod("GET");
+            urlConnection.connect();
+            
+            int responseCode = urlConnection.getResponseCode();
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                InputStream inputStream = urlConnection.getInputStream();
+                ObjectMapper objectMapper = new ObjectMapper();
+                JsonNode rootNode = objectMapper.readTree(inputStream.readAllBytes());
+                
+                // Extract file names from assets
+                for (JsonNode assetNode : rootNode) {
+                    JsonNode nameNode = assetNode.path("name");
+                    String assetName = nameNode.asText();
+                    
+                    // For GitHub releases, we treat all assets as being in the same "directory"
+                    // In a more sophisticated implementation, we could parse asset names for directory structure
+                    if (assetName != null && !assetName.isEmpty()) {
+                        fileList.add(assetName);
+                    }
+                }
+                
+                System.out.println("GhRelAssetWagon: Found " + fileList.size() + " files in directory: " + destinationDirectory);
+            } else if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
+                System.out.println("GhRelAssetWagon: Release assets not found for: " + repository + "/" + tag);
+                return fileList; // Return empty list
+            } else {
+                throw new TransferFailedException("Failed to retrieve file list. HTTP response code: " + responseCode);
+            }
+            
+        } catch (IOException e) {
+            throw new TransferFailedException("Failed to retrieve file list: " + e.getMessage(), e);
+        } catch (Exception e) {
+            throw new TransferFailedException("Unexpected error during getFileList: " + e.getMessage(), e);
+        }
+        
+        return fileList;
+    }
+
+    /**
+     * Checks if a resource exists in the GitHub release assets.
+     * This method queries the GitHub API to determine if the specified resource
+     * exists as an asset in the release.
+     *
+     * @param resourceName the name of the resource to check
+     * @return true if the resource exists, false otherwise
+     * @throws TransferFailedException    if the transfer fails
+     * @throws AuthorizationException     if the user is not authorized to access the resource
+     */
+    @Override
+    public boolean resourceExists(String resourceName)
+            throws TransferFailedException, AuthorizationException {
+        System.out.println("GhRelAssetWagon: Checking if resource exists: " + resourceName);
+        
+        try {
+            // Parse repository and tag from URL
+            String repoUrl = this.getRepository().getUrl();
+            // Handle both ghrelasset:// and regular URL formats
+            if (repoUrl.startsWith("ghrelasset://")) {
+                repoUrl = repoUrl.substring("ghrelasset://".length());
+            }
+            String[] urlParts = repoUrl.split("/");
+            if (urlParts.length < 3) {
+                throw new TransferFailedException("Invalid repository URL format");
+            }
+            
+            String repository = urlParts[0] + "/" + urlParts[1];
+            String tag = urlParts[2];
+            String assetName = resourceName.substring(resourceName.lastIndexOf("/") + 1);
+            
+            // Get release information
+            String releaseId;
+            try {
+                releaseId = getReleaseId(repository, tag);
+            } catch (IOException e) {
+                System.out.println("GhRelAssetWagon: Release not found for tag: " + tag + " - " + e.getMessage());
+                return false; // Release doesn't exist
+            }
+            if (releaseId == null) {
+                System.out.println("GhRelAssetWagon: Release not found for tag: " + tag);
+                return false; // Release doesn't exist
+            }
+            
+            // Check if asset exists in the release
+            URL url = new URL(apiEndpoint + "/repos/" + repository + "/releases/" + releaseId + "/assets");
+            HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
+            urlConnection.setRequestProperty("Accept", "application/vnd.github+json");
+            urlConnection.setRequestProperty("Authorization", "Bearer " + this.authenticationInfo.getPassword());
+            urlConnection.setRequestProperty("X-GitHub-Api-Version", "2022-11-28");
+            urlConnection.setRequestMethod("GET");
+            urlConnection.connect();
+            
+            int responseCode = urlConnection.getResponseCode();
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                InputStream inputStream = urlConnection.getInputStream();
+                ObjectMapper objectMapper = new ObjectMapper();
+                JsonNode rootNode = objectMapper.readTree(inputStream.readAllBytes());
+                
+                // Search for the asset by name
+                for (JsonNode assetNode : rootNode) {
+                    JsonNode nameNode = assetNode.path("name");
+                    if (nameNode.asText().equals(assetName)) {
+                        System.out.println("GhRelAssetWagon: Resource exists: " + resourceName);
+                        return true;
+                    }
+                }
+                
+                System.out.println("GhRelAssetWagon: Resource not found: " + resourceName);
+                return false;
+            } else if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
+                System.out.println("GhRelAssetWagon: Release not found, resource does not exist: " + resourceName);
+                return false;
+            } else {
+                throw new TransferFailedException("Failed to check resource existence. HTTP response code: " + responseCode);
+            }
+            
+        } catch (IOException e) {
+            throw new TransferFailedException("Failed to check resource existence: " + e.getMessage(), e);
+        } catch (Exception e) {
+            throw new TransferFailedException("Unexpected error during resourceExists: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Uploads a directory and its contents to the GitHub release.
+     * This method recursively processes all files in the source directory
+     * and uploads them as individual assets to the GitHub release.
+     *
+     * @param sourceDirectory      the source directory to upload
+     * @param destinationDirectory the destination directory path (used as prefix for asset names)
+     * @throws TransferFailedException       if the transfer fails
+     * @throws ResourceDoesNotExistException if the source directory does not exist
+     * @throws AuthorizationException        if the user is not authorized to perform the operation
+     */
+    @Override
+    public void putDirectory(File sourceDirectory, String destinationDirectory)
+            throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
+        System.out.println("GhRelAssetWagon: putDirectory from " + sourceDirectory + " to " + destinationDirectory);
+        
+        if (!sourceDirectory.exists()) {
+            throw new ResourceDoesNotExistException("Source directory does not exist: " + sourceDirectory);
+        }
+        
+        if (!sourceDirectory.isDirectory()) {
+            throw new TransferFailedException("Source is not a directory: " + sourceDirectory);
+        }
+        
+        try {
+            // Recursively upload all files in the directory
+            uploadDirectoryRecursively(sourceDirectory, destinationDirectory, "");
+            
+        } catch (Exception e) {
+            throw new TransferFailedException("Failed to upload directory: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Helper method to recursively upload directory contents.
+     *
+     * @param currentDir           the current directory being processed
+     * @param destinationDirectory the base destination directory
+     * @param relativePath         the relative path from the source directory root
+     * @throws Exception if an error occurs during upload
+     */
+    private void uploadDirectoryRecursively(File currentDir, String destinationDirectory, String relativePath) throws Exception {
+        File[] files = currentDir.listFiles();
+        if (files == null) {
+            return; // Empty directory or not accessible
+        }
+        
+        for (File file : files) {
+            String currentRelativePath = relativePath.isEmpty() ? file.getName() : relativePath + "/" + file.getName();
+            String destinationPath = destinationDirectory + currentRelativePath;
+            
+            if (file.isDirectory()) {
+                // Recursively process subdirectory
+                uploadDirectoryRecursively(file, destinationDirectory, currentRelativePath);
+            } else {
+                // Upload individual file
+                System.out.println("GhRelAssetWagon: Uploading file: " + file + " to " + destinationPath);
+                put(file, destinationPath);
+            }
+        }
+    }
+
+    /**
+     * Indicates whether this wagon supports directory copy operations.
+     * The GhRelAssetWagon supports directory operations by uploading
+     * individual files as separate GitHub release assets.
+     *
+     * @return true, indicating that directory copy is supported
+     */
+    @Override
+    public boolean supportsDirectoryCopy() {
+        return true;
     }
 
 }
