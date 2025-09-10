@@ -170,13 +170,15 @@ jobs:
           
           # Parse JaCoCo coverage results
           if [ -f "target/site/jacoco/jacoco.xml" ]; then
-            INSTRUCTION_COVERED=$(xmllint --xpath "//counter[@type='INSTRUCTION']/@covered" target/site/jacoco/jacoco.xml | cut -d'"' -f2)
-            INSTRUCTION_MISSED=$(xmllint --xpath "//counter[@type='INSTRUCTION']/@missed" target/site/jacoco/jacoco.xml | cut -d'"' -f2)
-            BRANCH_COVERED=$(xmllint --xpath "//counter[@type='BRANCH']/@covered" target/site/jacoco/jacoco.xml | cut -d'"' -f2)
-            BRANCH_MISSED=$(xmllint --xpath "//counter[@type='BRANCH']/@missed" target/site/jacoco/jacoco.xml | cut -d'"' -f2)
-            LINE_COVERED=$(xmllint --xpath "//counter[@type='LINE']/@covered" target/site/jacoco/jacoco.xml | cut -d'"' -f2)
-            LINE_MISSED=$(xmllint --xpath "//counter[@type='LINE']/@missed" target/site/jacoco/jacoco.xml | cut -d'"' -f2)
+            # Extract the final summary counters (last occurrence of each type)
+            INSTRUCTION_COVERED=$(grep -o '<counter type="INSTRUCTION" missed="[0-9]*" covered="[0-9]*"/>' target/site/jacoco/jacoco.xml | tail -1 | sed 's/.*covered="\([0-9]*\)".*/\1/')
+            INSTRUCTION_MISSED=$(grep -o '<counter type="INSTRUCTION" missed="[0-9]*" covered="[0-9]*"/>' target/site/jacoco/jacoco.xml | tail -1 | sed 's/.*missed="\([0-9]*\)".*/\1/')
+            BRANCH_COVERED=$(grep -o '<counter type="BRANCH" missed="[0-9]*" covered="[0-9]*"/>' target/site/jacoco/jacoco.xml | tail -1 | sed 's/.*covered="\([0-9]*\)".*/\1/')
+            BRANCH_MISSED=$(grep -o '<counter type="BRANCH" missed="[0-9]*" covered="[0-9]*"/>' target/site/jacoco/jacoco.xml | tail -1 | sed 's/.*missed="\([0-9]*\)".*/\1/')
+            LINE_COVERED=$(grep -o '<counter type="LINE" missed="[0-9]*" covered="[0-9]*"/>' target/site/jacoco/jacoco.xml | tail -1 | sed 's/.*covered="\([0-9]*\)".*/\1/')
+            LINE_MISSED=$(grep -o '<counter type="LINE" missed="[0-9]*" covered="[0-9]*"/>' target/site/jacoco/jacoco.xml | tail -1 | sed 's/.*missed="\([0-9]*\)".*/\1/')
             
+            # Calculate totals and percentages
             INSTRUCTION_TOTAL=$((INSTRUCTION_COVERED + INSTRUCTION_MISSED))
             BRANCH_TOTAL=$((BRANCH_COVERED + BRANCH_MISSED))
             LINE_TOTAL=$((LINE_COVERED + LINE_MISSED))
