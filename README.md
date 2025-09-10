@@ -52,9 +52,14 @@ GhRelAssetWagon
 |   |   |           └── amadeusitgroup
 |   |   |               └── maven
 |   |   |                   └── wagon
-|   |   |                       └── GhRelAssetWagon.java
+|   |   |                       ├── GhRelAssetWagon.java
+|   |   |                       ├── ChecksumHandler.java
+|   |   |                       ├── MavenMetadataHandler.java
+|   |   |                       └── RepositoryValidator.java
 |   |   └── resources
 |   |       └── META-INF
+|   |           ├── plexus
+|   |           |   └── components.xml
 |   |           └── services
 |   |               └── org.apache.maven.wagon.Wagon
 |   └── test
@@ -64,36 +69,77 @@ GhRelAssetWagon
 |                   └── amadeusitgroup
 |                       └── maven
 |                           └── wagon
-|                               └── GhRelAssetWagonTest.java
+|                               ├── GhRelAssetWagonTest.java
+|                               ├── ChecksumHandlerTest.java
+|                               ├── MavenMetadataHandlerTest.java
+|                               └── RepositoryValidatorTest.java
+├── .github
+|   └── workflows
+|       ├── ci.yaml
+|       └── maven-central-deploy.yml
+├── docs
+|   ├── ARCHITECTURE.md
+|   ├── MAVEN_CENTRAL_DEPLOYMENT.md
+|   └── WAGON_ENHANCEMENT_ANALYSIS.md
 ├── pom.xml
+├── CONTRIBUTING.md
+├── LICENSE
 └── README.md
 ```
 
 ## Files
 
-- `src/main/java/io/github/amadeusitgroup/maven/wagon/GhRelAssetWagon.java`: This file contains the implementation of the GhRelAssetWagon class, which is a Maven Wagon provider extension that handles the "ghrelasset://" scheme.
+### Core Implementation
+- `src/main/java/io/github/amadeusitgroup/maven/wagon/GhRelAssetWagon.java`: Main Maven Wagon provider implementation that handles the "ghrelasset://" scheme with enhanced repository functionality.
+- `src/main/java/io/github/amadeusitgroup/maven/wagon/ChecksumHandler.java`: Handles MD5, SHA-1, and SHA-256 checksum generation and validation for Maven artifacts.
+- `src/main/java/io/github/amadeusitgroup/maven/wagon/MavenMetadataHandler.java`: Generates Maven metadata XML files for group, artifact, and version levels including SNAPSHOT support.
+- `src/main/java/io/github/amadeusitgroup/maven/wagon/RepositoryValidator.java`: Validates Maven repository paths and extracts coordinates with support for complex extensions and classifiers.
 
-- `src/main/resources/META-INF/services/org.apache.maven.wagon.Wagon`: This file specifies the fully qualified name of the GhRelAssetWagon class as a service provider for the org.apache.maven.wagon.Wagon interface.
+### Configuration
+- `src/main/resources/META-INF/services/org.apache.maven.wagon.Wagon`: Service provider configuration for the Maven Wagon interface.
+- `src/main/resources/META-INF/plexus/components.xml`: Plexus container configuration for dependency injection.
 
-- `src/test/java/io/github/amadeusitgroup/maven/wagon/GhRelAssetWagonTest.java`: This file contains the unit tests for the GhRelAssetWagon class.
+### Testing
+- `src/test/java/io/github/amadeusitgroup/maven/wagon/GhRelAssetWagonTest.java`: Comprehensive unit tests for the main wagon implementation (27 tests).
+- `src/test/java/io/github/amadeusitgroup/maven/wagon/ChecksumHandlerTest.java`: Unit tests for checksum functionality (17 tests).
+- `src/test/java/io/github/amadeusitgroup/maven/wagon/MavenMetadataHandlerTest.java`: Unit tests for Maven metadata generation (12 tests).
+- `src/test/java/io/github/amadeusitgroup/maven/wagon/RepositoryValidatorTest.java`: Unit tests for repository validation (13 tests).
 
-- `pom.xml`: This file is the Maven project configuration file. It defines the project dependencies, build settings, and other project-specific configurations.
-
-- `README.md`: This file contains the documentation and information about the project.
+### Build and Documentation
+- `pom.xml`: Maven project configuration with dependencies, plugins, and Maven Central deployment setup.
+- `.github/workflows/ci.yaml`: Continuous Integration workflow with comprehensive testing, coverage reporting, and security scanning.
+- `.github/workflows/maven-central-deploy.yml`: Maven Central deployment workflow with GPG signing and validation.
+- `docs/`: Comprehensive documentation including architecture, deployment guides, and enhancement analysis.
+- `README.md`: This documentation file.
 
 ## Features
 
+### Core Functionality
 - **GitHub Release Asset Repository**: Use GitHub release assets as a Maven repository
 - **Seamless Integration**: Works with standard Maven commands (`mvn deploy`, `mvn install`)
 - **Authentication**: Secure access using GitHub Personal Access Tokens
 - **Local Caching**: Efficient ZIP-based caching in `~/.ghrelasset/repos/`
 - **Cross-Platform**: Compatible with all platforms supporting Java 8+
-- **Enhanced Wagon Interface Support**: 
-  - **File Listing**: List all artifacts in a release (`getFileList()`)
-  - **Resource Existence Checking**: Verify if artifacts exist before download (`resourceExists()`)
-  - **Directory Upload**: Upload entire directories as individual release assets (`putDirectory()`)
-  - **Conditional Downloads**: Download only if remote files are newer (`getIfNewer()`)
-  - **Directory Copy Support**: Full support for directory-based operations (`supportsDirectoryCopy()`)
+
+### Enhanced Wagon Interface Support
+- **File Listing**: List all artifacts in a release (`getFileList()`)
+- **Resource Existence Checking**: Verify if artifacts exist before download (`resourceExists()`)
+- **Directory Upload**: Upload entire directories as individual release assets (`putDirectory()`)
+- **Conditional Downloads**: Download only if remote files are newer (`getIfNewer()`)
+- **Directory Copy Support**: Full support for directory-based operations (`supportsDirectoryCopy()`)
+
+### Maven Repository Standards Compliance
+- **Maven Metadata Generation**: Automatic generation of `maven-metadata.xml` files at group, artifact, and version levels
+- **SNAPSHOT Support**: Full support for SNAPSHOT versions with timestamp and build number management
+- **Checksum Generation**: Automatic MD5, SHA-1, and SHA-256 checksum generation for all artifacts
+- **Repository Structure Validation**: Comprehensive validation of Maven repository paths and coordinate extraction
+- **Complex Artifact Support**: Support for artifacts with classifiers and complex extensions (e.g., `.tar.gz`)
+
+### Quality Assurance
+- **Comprehensive Testing**: 69 unit tests with 72% code coverage
+- **Continuous Integration**: Automated testing, security scanning, and coverage reporting
+- **Maven Central Ready**: Full GPG signing and deployment pipeline for Maven Central distribution
+- **Security Scanning**: Integrated Trivy vulnerability scanning and SBOM generation
 
 ## Usage
 
@@ -144,13 +190,13 @@ Recommended way is to store the token in a file with a proper permissions applie
     <!--
     This section of the pom.xml file defines the extensions for the project. 
     It includes the configuration for the "ghrelasset-wagon" extension, which is used for handling GitHub release assets. 
-    The extension is specified with the groupId "io.github.amadeusitgroup.maven.wagon", the artifactId "ghrelasset-wagon", and the version "1.0.0".
+    The extension is specified with the groupId "io.github.amadeusitgroup.maven.wagon", the artifactId "ghrelasset-wagon", and the version "0.0.1".
     -->
     <extensions>
       <extension>
         <groupId>io.github.amadeusitgroup.maven.wagon</groupId>
         <artifactId>ghrelasset-wagon</artifactId>
-        <version>1.0.0</version>
+        <version>0.0.1</version>
       </extension>
     </extensions>
   ...
@@ -199,7 +245,7 @@ mvn clean deploy
       <extension>
           <groupId>io.github.amadeusitgroup.maven.wagon</groupId>
           <artifactId>ghrelasset-wagon</artifactId>
-          <version>1.0.0</version>
+          <version>0.0.1</version>
       </extension>
     </extensions>
     </build>

@@ -20,6 +20,22 @@
             <distribution>repo</distribution>
         </license>
     </licenses>
+    
+    <developers>
+        <developer>
+            <id>amadeusitgroup</id>
+            <name>Amadeus IT Group</name>
+            <email>opensource@amadeus.com</email>
+            <organization>Amadeus IT Group</organization>
+            <organizationUrl>https://amadeus.com</organizationUrl>
+        </developer>
+    </developers>
+    
+    <scm>
+        <connection>scm:git:git://github.com/AmadeusITGroup/GhRelAssetWagon.git</connection>
+        <developerConnection>scm:git:https://github.com/AmadeusITGroup/GhRelAssetWagon.git</developerConnection>
+        <url>https://github.com/AmadeusITGroup/GhRelAssetWagon/tree/main</url>
+    </scm>
 
     <properties>
         <maven.compiler.source>1.8</maven.compiler.source>
@@ -110,6 +126,31 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.1</version>
+                <configuration>
+                    <includes>
+                        <include>**/*Test.java</include>
+                    </includes>
+                    <reportFormat>xml</reportFormat>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.12</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -154,7 +195,7 @@
                         </goals>
                         <configuration>
                             <keyname>${gpg.keyname}</keyname>
-                            <passphraseServerId>${gpg.keyname}</passphraseServerId>
+                            <passphrase>${gpg.passphrase}</passphrase>
                             <skip>${gpg.skip}</skip>
                             <gpgArguments>
                                 <arg>--batch</arg>
@@ -162,6 +203,10 @@
                                 <arg>--pinentry-mode</arg>
                                 <arg>loopback</arg>
                                 <arg>--no-tty</arg>
+                                <arg>--digest-algo</arg>
+                                <arg>SHA256</arg>
+                                <arg>--cipher-algo</arg>
+                                <arg>AES256</arg>
                             </gpgArguments>
                         </configuration>
                     </execution>
