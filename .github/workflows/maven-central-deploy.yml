@@ -89,10 +89,11 @@ jobs:
         gpg-connect-agent reloadagent /bye || true
         
         # Test signing with the exact same parameters Maven will use
-        echo "test" | gpg --detach-sign --armor --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" --default-key "$KEY_ID" --output /tmp/test.asc
+        echo "test" > /tmp/test.txt
+        gpg --detach-sign --armor --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" --default-key "$KEY_ID" --output /tmp/test.asc /tmp/test.txt
         
         # Verify the test signature
-        gpg --verify /tmp/test.asc
+        gpg --verify /tmp/test.asc /tmp/test.txt
         echo "GPG signing test successful - signature verified"
         
         # Export public key for verification (useful for debugging)
