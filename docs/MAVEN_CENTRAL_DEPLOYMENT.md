@@ -69,7 +69,8 @@ Configure the following secrets in your GitHub repository (`Settings → Secrets
 | `OSSRH_TOKEN` | Sonatype Central password token | `xyz789uvw` |
 | `GPG_PRIVATE_KEY` | GPG private key (armored) | `-----BEGIN PGP PRIVATE KEY BLOCK-----...` |
 | `GPG_PASSPHRASE` | GPG key passphrase | `your-secure-passphrase` |
-| `GPG_KEYNAME` | GPG key ID | `1234567890ABCDEF` |
+
+**Note**: The `GPG_KEYNAME` secret is no longer required as the workflow automatically detects and uses the imported GPG key ID.
 
 ## Deployment Workflow
 

@@ -40,13 +40,33 @@ jobs:
         GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
       run: |
+        # Create GPG directory and set permissions
+        mkdir -p ~/.gnupg
+        chmod 700 ~/.gnupg
+        
+        # Import the GPG key
         echo "$GPG_PRIVATE_KEY" | gpg --dearmor --batch --yes --import
+        
+        # List keys to verify import and get key ID
+        echo "Imported GPG keys:"
         gpg --list-secret-keys --keyid-format LONG
+        
+        # Get the key ID and set it as default
+        KEY_ID=$(gpg --list-secret-keys --keyid-format LONG | grep sec | head -1 | sed 's/.*\/\([A-F0-9]*\).*/\1/')
+        echo "Using GPG key ID: $KEY_ID"
+        echo "GPG_KEY_ID=$KEY_ID" >> $GITHUB_ENV
+        
         # Configure GPG for non-interactive use
         echo "use-agent" >> ~/.gnupg/gpg.conf
         echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
         echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+        echo "default-key $KEY_ID" >> ~/.gnupg/gpg.conf
+        
+        # Restart GPG agent
         gpg-connect-agent reloadagent /bye
+        
+        # Test signing
+        echo "test" | gpg --clearsign --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE"
         
     - name: Configure Git
       run: |
@@ -64,7 +84,7 @@ jobs:
       env:
         MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
         MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
-        GPG_KEYNAME: ${{ secrets.GPG_KEYNAME }}
+        GPG_KEYNAME: ${{ env.GPG_KEY_ID }}
         GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
       run: |
         echo "🔍 Performing dry run - validating artifacts without publishing"
@@ -76,7 +96,7 @@ jobs:
       env:
         MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
         MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
-        GPG_KEYNAME: ${{ secrets.GPG_KEYNAME }}
+        GPG_KEYNAME: ${{ env.GPG_KEY_ID }}
         GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
       run: |
         echo "🚀 Deploying to Maven Central..."
@@ -88,7 +108,7 @@ jobs:
       env:
         MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
         MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
-        GPG_KEYNAME: ${{ secrets.GPG_KEYNAME }}
+        GPG_KEYNAME: ${{ env.GPG_KEY_ID }}
         GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
       run: |
         echo "🚀 Manual deployment to Maven Central..."
