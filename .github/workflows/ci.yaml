@@ -42,4 +42,4 @@ jobs:
           distribution: temurin
       - name: Build with Maven
         run: |
-          mvn -B clean verify
+          mvn -B clean verify -Dgpg.skip=true
