@@ -52,13 +52,17 @@ jobs:
         echo "Imported GPG keys:"
         gpg --list-secret-keys --keyid-format LONG
         
-        # Get the key ID and set it as default
+        # Get the key ID and fingerprint
         KEY_ID=$(gpg --list-secret-keys --keyid-format LONG | grep sec | head -1 | sed 's/.*\/\([A-F0-9]*\).*/\1/')
         echo "Using GPG key ID: $KEY_ID"
         echo "GPG_KEY_ID=$KEY_ID" >> $GITHUB_ENV
         
+        # Get the full fingerprint for trust import
+        FINGERPRINT=$(gpg --list-secret-keys --with-colons --fingerprint | grep fpr | head -1 | cut -d: -f10)
+        echo "GPG fingerprint: $FINGERPRINT"
+        
         # Set ultimate trust for the imported key to avoid signature validation issues
-        echo "$KEY_ID:6:" | gpg --batch --import-ownertrust
+        echo "$FINGERPRINT:6:" | gpg --batch --import-ownertrust
         
         # Verify key trust
         gpg --list-keys --with-colons | grep "^pub" | head -1
