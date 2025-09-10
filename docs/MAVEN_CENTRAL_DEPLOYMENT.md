@@ -49,6 +49,9 @@ gpg --armor --export-secret-keys YOUR_KEY_ID
 # Export the public key (for verification)
 gpg --armor --export YOUR_KEY_ID
 
+# Send the public key to the keyserver
+gpg --keyserver hkp://keyserver.ubuntu.com --send-keys YOUR_KEY_ID
+
 # Test signing (important for CI validation)
 echo "test" | gpg --clearsign --batch --yes --pinentry-mode loopback
 ```
