@@ -1,4 +1,4 @@
-package com.amadeus.maven.wagon;
+package io.github.amadeusitgroup.maven.wagon;
 
 import org.apache.maven.wagon.AbstractWagon;
 import org.apache.maven.wagon.ConnectionException;
