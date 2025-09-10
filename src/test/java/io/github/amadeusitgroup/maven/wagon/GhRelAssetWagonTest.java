@@ -1,4 +1,4 @@
-package com.amadeus.maven.wagon;
+package io.github.amadeusitgroup.maven.wagon;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
