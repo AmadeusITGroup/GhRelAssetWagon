@@ -45,12 +45,12 @@ jobs:
         mkdir -p ~/.gnupg
         chmod 700 ~/.gnupg
         
-        # Import the GPG key
-        echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --import
+        # Import the GPG key (suppress output to avoid exposing email)
+        echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --import 2>&1 | sed 's/<[^>]*>/<***@***.***>/g'
         
-        # List keys to verify import and get key ID
+        # List keys to verify import and get key ID (mask email for security)
         echo "Imported GPG keys:"
-        gpg --list-secret-keys --keyid-format LONG
+        gpg --list-secret-keys --keyid-format LONG | sed 's/<[^>]*>/<***@***.***>/g'
         
         # Get the key ID and fingerprint
         KEY_ID=$(gpg --list-secret-keys --keyid-format LONG | grep sec | head -1 | sed 's/.*\/\([A-F0-9]*\).*/\1/')
