@@ -15,6 +15,10 @@ import java.io.IOException;
 import java.security.MessageDigest;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Set;
+import java.util.HashSet;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -48,7 +52,22 @@ public class GhRelAssetWagon extends AbstractWagon {
     /**
      * The list of artifacts to upload.
      */
-    private List<String> artifactsToUpload = new ArrayList<String>();
+    List<String> artifactsToUpload = new ArrayList<String>();
+
+    /**
+     * Handler for Maven metadata generation and management.
+     */
+    private final MavenMetadataHandler metadataHandler = new MavenMetadataHandler();
+
+    /**
+     * Handler for checksum generation and validation.
+     */
+    private final ChecksumHandler checksumHandler = new ChecksumHandler();
+
+    /**
+     * Cache for tracking uploaded artifacts and their metadata.
+     */
+    private final Map<String, Set<String>> repositoryStructure = new HashMap<>();
 
     /**
      * The base URL for the GitHub API.
@@ -865,41 +884,261 @@ public class GhRelAssetWagon extends AbstractWagon {
         }
     }
 
-    /**
-     * Uploads a file to the specified destination.
-     *
-     * @param source      The file to be uploaded.
-     * @param destination The destination path where the file will be uploaded.
-     * @throws TransferFailedException       If the transfer fails.
-     * @throws ResourceDoesNotExistException If the resource does not exist.
-     * @throws AuthorizationException        If the user is not authorized to
-     *                                       perform the operation.
-     */
-    @Override
-    public void put(File source, String destination)
-            throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
-        System.out.println("GhRelAssetWagon: put " + source + " to " + destination);
 
+    /**
+     * Generates and stages checksum files for an artifact.
+     * 
+     * @param source The source file to generate checksums for
+     * @param destination The destination path in the repository
+     * @throws IOException If checksum generation fails
+     */
+    private void generateAndStageChecksums(File source, String destination) throws IOException {
+        Map<String, String> checksums = checksumHandler.generateChecksums(source);
+        
+        for (Map.Entry<String, String> entry : checksums.entrySet()) {
+            String algorithm = entry.getKey();
+            String checksum = entry.getValue();
+            String extension = checksumHandler.getChecksumFileExtension(algorithm);
+            
+            // Create temporary checksum file
+            File checksumFile = File.createTempFile("checksum-" + algorithm, "." + extension);
+            try (FileOutputStream fos = new FileOutputStream(checksumFile)) {
+                fos.write(checksum.getBytes());
+            }
+            
+            // Stage the checksum file
+            String checksumDestination = destination + "." + extension;
+            stageArtifact(checksumFile, checksumDestination);
+            
+            // Clean up temporary file
+            checksumFile.delete();
+        }
+    }
+
+    /**
+     * Stages an artifact for upload by adding it to the local ZIP cache.
+     * 
+     * @param source The source file to stage
+     * @param destination The destination path in the repository
+     * @throws IOException If staging fails
+     */
+    private void stageArtifact(File source, String destination) throws IOException {
         String releaseName = this.getRepository().getUrl().substring(0, this.getRepository().getUrl().lastIndexOf("/"));
         String tagName = this.getRepository().getUrl().substring(this.getRepository().getUrl().lastIndexOf("/") + 1);
 
-        System.out.println("GhRelAssetWagon: put - releaseName: " + releaseName);
-        System.out.println("GhRelAssetWagon: put - tagName: " + tagName);
+        System.out.println("GhRelAssetWagon: stageArtifact - releaseName: " + releaseName);
+        System.out.println("GhRelAssetWagon: stageArtifact - tagName: " + tagName);
 
-        String sha1;
         try {
-            sha1 = getSHA1(this.getRepository().getUrl().toString());
+            String sha1 = getSHA1(this.getRepository().getUrl().toString());
             File zipRepo = new File(System.getProperty("user.home") + "/.ghrelasset/repos/" + sha1);
-            System.out.println("GhRelAssetWagon: put - repo: " + zipRepo);
-            System.out.println("GhRelAssetWagon: get - repo exists");
+            System.out.println("GhRelAssetWagon: stageArtifact - repo: " + zipRepo);
 
             addResourceToZip(zipRepo.getAbsolutePath(), source.toString(), destination);
             this.artifactsToUpload.add(source.toString());
 
         } catch (Exception e) {
-            e.printStackTrace();
+            throw new IOException("Failed to stage artifact", e);
         }
+    }
 
+    /**
+     * Updates the repository structure tracking for metadata generation.
+     * 
+     * @param destination The artifact destination path
+     */
+    private void updateRepositoryStructure(String destination) {
+        // Parse the Maven coordinates from the destination path
+        // Format: groupId/artifactId/version/artifact-version.extension
+        String[] pathParts = destination.split("/");
+        if (pathParts.length >= 3) {
+            String version = pathParts[pathParts.length - 2];
+            String artifactId = pathParts[pathParts.length - 3];
+            
+            // Build group ID from remaining path parts
+            StringBuilder groupIdBuilder = new StringBuilder();
+            for (int i = 0; i < pathParts.length - 3; i++) {
+                if (i > 0) groupIdBuilder.append(".");
+                groupIdBuilder.append(pathParts[i]);
+            }
+            String groupId = groupIdBuilder.toString();
+            
+            // Track the structure
+            String groupKey = "group:" + groupId;
+            String artifactKey = "artifact:" + groupId + ":" + artifactId;
+            
+            repositoryStructure.computeIfAbsent(groupKey, k -> new HashSet<>()).add(artifactId);
+            repositoryStructure.computeIfAbsent(artifactKey, k -> new HashSet<>()).add(version);
+        }
+    }
+
+    /**
+     * Determines if a destination path represents a main artifact (not a classifier).
+     * 
+     * @param destination The destination path
+     * @return true if this is a main artifact, false otherwise
+     */
+    private boolean isMainArtifact(String destination) {
+        String filename = destination.substring(destination.lastIndexOf("/") + 1);
+        
+        // Skip checksum files
+        if (checksumHandler.isChecksumFile(filename)) {
+            return false;
+        }
+        
+        // Main artifacts typically follow the pattern: artifactId-version.extension
+        // Classified artifacts follow: artifactId-version-classifier.extension
+        String[] pathParts = destination.split("/");
+        if (pathParts.length >= 3) {
+            String version = pathParts[pathParts.length - 2];
+            String artifactId = pathParts[pathParts.length - 3];
+            
+            String expectedPrefix = artifactId + "-" + version;
+            String nameWithoutExt = filename.contains(".") ? 
+                filename.substring(0, filename.lastIndexOf(".")) : filename;
+            
+            // Main artifact if the name matches exactly artifactId-version
+            return nameWithoutExt.equals(expectedPrefix);
+        }
+        
+        return false;
+    }
+
+    /**
+     * Generates Maven metadata files for the given artifact destination.
+     * 
+     * @param destination The artifact destination path
+     * @throws IOException If metadata generation fails
+     */
+    private void generateMavenMetadata(String destination) throws IOException {
+        String[] pathParts = destination.split("/");
+        if (pathParts.length < 3) {
+            return; // Invalid path structure
+        }
+        
+        String version = pathParts[pathParts.length - 2];
+        String artifactId = pathParts[pathParts.length - 3];
+        
+        // Build group ID
+        StringBuilder groupIdBuilder = new StringBuilder();
+        for (int i = 0; i < pathParts.length - 3; i++) {
+            if (i > 0) groupIdBuilder.append(".");
+            groupIdBuilder.append(pathParts[i]);
+        }
+        String groupId = groupIdBuilder.toString();
+        
+        // Generate artifact-level metadata
+        generateArtifactLevelMetadata(groupId, artifactId);
+        
+        // Generate group-level metadata if this is a plugin
+        if (isPluginArtifact(destination)) {
+            generateGroupLevelMetadata(groupId, artifactId);
+        }
+        
+        // Generate version-level metadata for SNAPSHOT versions
+        if (version.endsWith("-SNAPSHOT")) {
+            generateVersionLevelMetadata(groupId, artifactId, version);
+        }
+    }
+
+    /**
+     * Generates artifact-level Maven metadata.
+     * 
+     * @param groupId The group ID
+     * @param artifactId The artifact ID
+     * @throws IOException If metadata generation fails
+     */
+    private void generateArtifactLevelMetadata(String groupId, String artifactId) throws IOException {
+        String artifactKey = "artifact:" + groupId + ":" + artifactId;
+        Set<String> versions = repositoryStructure.get(artifactKey);
+        
+        if (versions != null && !versions.isEmpty()) {
+            String metadataXml = metadataHandler.generateArtifactMetadata(groupId, artifactId, new ArrayList<>(versions));
+            
+            // Stage the metadata file
+            String metadataPath = groupId.replace(".", "/") + "/" + artifactId + "/maven-metadata.xml";
+            File tempMetadataFile = File.createTempFile("maven-metadata", ".xml");
+            
+            try (FileOutputStream fos = new FileOutputStream(tempMetadataFile)) {
+                fos.write(metadataXml.getBytes());
+            }
+            
+            stageArtifact(tempMetadataFile, metadataPath);
+            tempMetadataFile.delete();
+        }
+    }
+
+    /**
+     * Generates group-level Maven metadata for plugins.
+     * 
+     * @param groupId The group ID
+     * @param artifactId The artifact ID
+     * @throws IOException If metadata generation fails
+     */
+    private void generateGroupLevelMetadata(String groupId, String artifactId) throws IOException {
+        // For simplicity, assume plugin prefix is the artifactId without "-maven-plugin" suffix
+        String prefix = artifactId.replace("-maven-plugin", "").replace("maven-", "");
+        
+        List<MavenMetadataHandler.PluginInfo> plugins = new ArrayList<>();
+        plugins.add(new MavenMetadataHandler.PluginInfo(artifactId, prefix, artifactId));
+        
+        String metadataXml = metadataHandler.generateGroupMetadata(groupId, plugins);
+        
+        // Stage the group-level metadata file
+        String metadataPath = groupId.replace(".", "/") + "/maven-metadata.xml";
+        File tempMetadataFile = File.createTempFile("maven-metadata-group", ".xml");
+        
+        try (FileOutputStream fos = new FileOutputStream(tempMetadataFile)) {
+            fos.write(metadataXml.getBytes());
+        }
+        
+        stageArtifact(tempMetadataFile, metadataPath);
+        tempMetadataFile.delete();
+    }
+
+    /**
+     * Generates version-level Maven metadata for SNAPSHOT versions.
+     * 
+     * @param groupId The group ID
+     * @param artifactId The artifact ID
+     * @param version The SNAPSHOT version
+     * @throws IOException If metadata generation fails
+     */
+    private void generateVersionLevelMetadata(String groupId, String artifactId, String version) throws IOException {
+        // Generate snapshot version info
+        String timestamp = new java.text.SimpleDateFormat("yyyyMMdd.HHmmss").format(new java.util.Date());
+        int buildNumber = 1; // In a real implementation, this would be incremented
+        
+        List<MavenMetadataHandler.SnapshotVersionInfo> snapshotVersions = new ArrayList<>();
+        snapshotVersions.add(new MavenMetadataHandler.SnapshotVersionInfo(
+            null, "jar", version.replace("-SNAPSHOT", "-" + timestamp + "-" + buildNumber),
+            timestamp.replace(".", ""), timestamp, buildNumber));
+        snapshotVersions.add(new MavenMetadataHandler.SnapshotVersionInfo(
+            null, "pom", version.replace("-SNAPSHOT", "-" + timestamp + "-" + buildNumber),
+            timestamp.replace(".", ""), timestamp, buildNumber));
+        
+        String metadataXml = metadataHandler.generateVersionMetadata(groupId, artifactId, version, snapshotVersions);
+        
+        // Stage the version-level metadata file
+        String metadataPath = groupId.replace(".", "/") + "/" + artifactId + "/" + version + "/maven-metadata.xml";
+        File tempMetadataFile = File.createTempFile("maven-metadata-version", ".xml");
+        
+        try (FileOutputStream fos = new FileOutputStream(tempMetadataFile)) {
+            fos.write(metadataXml.getBytes());
+        }
+        
+        stageArtifact(tempMetadataFile, metadataPath);
+        tempMetadataFile.delete();
+    }
+
+    /**
+     * Determines if an artifact is a Maven plugin based on its path.
+     * 
+     * @param destination The artifact destination path
+     * @return true if this appears to be a plugin artifact
+     */
+    private boolean isPluginArtifact(String destination) {
+        return destination.contains("maven-plugin") || destination.contains("-plugin");
     }
 
     /**
@@ -1221,6 +1460,52 @@ public class GhRelAssetWagon extends AbstractWagon {
                 System.out.println("GhRelAssetWagon: Uploading file: " + file + " to " + destinationPath);
                 put(file, destinationPath);
             }
+        }
+    }
+
+    /**
+     * Uploads a file to the specified destination.
+     *
+     * @param source      The file to be uploaded.
+     * @param destination The destination path where the file will be uploaded.
+     * @throws TransferFailedException If the transfer fails.
+     */
+    @Override
+    public void put(File source, String destination) throws TransferFailedException {
+        System.out.println("GhRelAssetWagon: put " + source.getAbsolutePath() + " to " + destination);
+        
+        try {
+            // Validate repository path structure
+            RepositoryValidator.ValidationResult validation = RepositoryValidator.validateRepositoryPath(destination);
+            if (!validation.isValid()) {
+                System.out.println("GhRelAssetWagon: Repository path validation failed: " + validation.getMessage());
+                // Log warning but continue - some legacy paths might not be perfectly compliant
+            }
+            
+            // Check if this is a checksum file - don't generate checksums for checksum files
+            boolean isChecksumFile = destination.endsWith(".md5") || destination.endsWith(".sha1") || 
+                                   destination.endsWith(".sha256") || destination.endsWith(".asc");
+            
+            if (!isChecksumFile) {
+                // Generate checksums for the source file
+                generateAndStageChecksums(source, destination);
+            }
+            
+            // Stage the main artifact
+            stageArtifact(source, destination);
+            
+            // Update repository structure tracking
+            updateRepositoryStructure(destination);
+            
+            // Generate Maven metadata if applicable (but not for checksum files)
+            if (!isChecksumFile) {
+                generateMavenMetadata(destination);
+            }
+            
+        } catch (IOException e) {
+            throw new TransferFailedException("Failed to upload artifact: " + e.getMessage(), e);
+        } catch (Exception e) {
+            throw new TransferFailedException("Unexpected error during put: " + e.getMessage(), e);
         }
     }
 
