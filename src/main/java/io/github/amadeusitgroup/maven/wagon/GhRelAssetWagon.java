@@ -1011,21 +1011,24 @@ public class GhRelAssetWagon extends AbstractWagon {
      * @throws IOException If metadata generation fails
      */
     private void generateMavenMetadata(String destination) throws IOException {
-        String[] pathParts = destination.split("/");
-        if (pathParts.length < 3) {
-            return; // Invalid path structure
+        // First validate if this is a valid Maven artifact path
+        RepositoryValidator.ValidationResult validation = RepositoryValidator.validateRepositoryPath(destination);
+        if (!validation.isValid()) {
+            // Skip metadata generation for non-Maven paths
+            System.out.println("GhRelAssetWagon: Skipping metadata generation for non-Maven path: " + destination);
+            return;
         }
         
-        String version = pathParts[pathParts.length - 2];
-        String artifactId = pathParts[pathParts.length - 3];
-        
-        // Build group ID
-        StringBuilder groupIdBuilder = new StringBuilder();
-        for (int i = 0; i < pathParts.length - 3; i++) {
-            if (i > 0) groupIdBuilder.append(".");
-            groupIdBuilder.append(pathParts[i]);
+        // Extract coordinates using the validator
+        RepositoryValidator.MavenCoordinates coordinates = RepositoryValidator.extractCoordinates(destination);
+        if (coordinates == null) {
+            System.out.println("GhRelAssetWagon: Could not extract coordinates from path: " + destination);
+            return;
         }
-        String groupId = groupIdBuilder.toString();
+        
+        String groupId = coordinates.getGroupId();
+        String artifactId = coordinates.getArtifactId();
+        String version = coordinates.getVersion();
         
         // Generate artifact-level metadata
         generateArtifactLevelMetadata(groupId, artifactId);
@@ -1488,7 +1491,12 @@ public class GhRelAssetWagon extends AbstractWagon {
             
             if (!isChecksumFile) {
                 // Generate checksums for the source file
-                generateAndStageChecksums(source, destination);
+                try {
+                    generateAndStageChecksums(source, destination);
+                } catch (Exception e) {
+                    // Log warning but don't fail the upload for checksum generation issues
+                    System.out.println("GhRelAssetWagon: Warning - Failed to generate checksums for " + destination + ": " + e.getMessage());
+                }
             }
             
             // Stage the main artifact
@@ -1499,7 +1507,12 @@ public class GhRelAssetWagon extends AbstractWagon {
             
             // Generate Maven metadata if applicable (but not for checksum files)
             if (!isChecksumFile) {
-                generateMavenMetadata(destination);
+                try {
+                    generateMavenMetadata(destination);
+                } catch (Exception e) {
+                    // Log warning but don't fail the upload for metadata generation issues
+                    System.out.println("GhRelAssetWagon: Warning - Failed to generate metadata for " + destination + ": " + e.getMessage());
+                }
             }
             
         } catch (IOException e) {
