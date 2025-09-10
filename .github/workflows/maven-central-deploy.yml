@@ -57,6 +57,12 @@ jobs:
         echo "Using GPG key ID: $KEY_ID"
         echo "GPG_KEY_ID=$KEY_ID" >> $GITHUB_ENV
         
+        # Set ultimate trust for the imported key to avoid signature validation issues
+        echo "$KEY_ID:6:" | gpg --batch --import-ownertrust
+        
+        # Verify key trust
+        gpg --list-keys --with-colons | grep "^pub" | head -1
+        
         # Configure GPG for non-interactive use
         mkdir -p ~/.gnupg
         chmod 700 ~/.gnupg
@@ -80,7 +86,14 @@ jobs:
         
         # Test signing with the exact same parameters Maven will use
         echo "test" | gpg --detach-sign --armor --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" --default-key "$KEY_ID" --output /tmp/test.asc
-        echo "GPG signing test successful"
+        
+        # Verify the test signature
+        gpg --verify /tmp/test.asc
+        echo "GPG signing test successful - signature verified"
+        
+        # Export public key for verification (useful for debugging)
+        gpg --armor --export "$KEY_ID" > /tmp/public_key.asc
+        echo "Public key exported for verification"
         
     - name: Configure Git
       run: |
@@ -105,6 +118,19 @@ jobs:
       
     - name: Verify build
       run: mvn clean verify -DskipTests
+      
+    - name: Debug GPG signatures
+      run: |
+        echo "🔍 Verifying GPG signatures were created correctly..."
+        ls -la target/*.asc || echo "No .asc files found"
+        
+        # Verify each signature file
+        for asc_file in target/*.asc; do
+          if [ -f "$asc_file" ]; then
+            echo "Verifying signature: $asc_file"
+            gpg --verify "$asc_file" || echo "Signature verification failed for $asc_file"
+          fi
+        done
       
     - name: Deploy to Maven Central (Dry Run)
       if: ${{ github.event.inputs.dry_run == 'true' }}
