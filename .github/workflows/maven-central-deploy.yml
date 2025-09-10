@@ -27,6 +27,7 @@ jobs:
         server-id: central
         server-username: MAVEN_USERNAME
         server-password: MAVEN_PASSWORD
+        settings-path: ${{ github.workspace }}
         
     - name: Cache Maven dependencies
       uses: actions/cache@v4
@@ -78,6 +79,17 @@ jobs:
         GH_RELEASE_ASSET_TOKEN: test_token
       run: mvn clean test
       
+    - name: Debug Maven settings
+      run: |
+        echo "Maven settings location: ${{ github.workspace }}/settings.xml"
+        if [ -f "${{ github.workspace }}/settings.xml" ]; then
+          echo "Settings.xml exists"
+          # Show structure without revealing credentials
+          xmllint --format "${{ github.workspace }}/settings.xml" | grep -E "(server|id)" || echo "No servers found"
+        else
+          echo "Settings.xml not found"
+        fi
+      
     - name: Verify build
       run: mvn clean verify -DskipTests
       
@@ -90,7 +102,22 @@ jobs:
         GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
       run: |
         echo "🔍 Performing dry run - validating artifacts without publishing"
-        mvn clean deploy -DskipTests -Dcentral.autoPublish=false -Dgpg.skip=false
+        echo "📋 Checking required secrets..."
+        if [ -z "$MAVEN_USERNAME" ]; then
+          echo "❌ ERROR: OSSRH_USERNAME secret is not configured"
+          echo "Please configure the following repository secrets:"
+          echo "- OSSRH_USERNAME: Your Sonatype OSSRH username"
+          echo "- OSSRH_TOKEN: Your Sonatype OSSRH token"
+          echo "- GPG_PRIVATE_KEY: Your GPG private key"
+          echo "- GPG_PASSPHRASE: Your GPG key passphrase"
+          exit 1
+        fi
+        if [ -z "$MAVEN_PASSWORD" ]; then
+          echo "❌ ERROR: OSSRH_TOKEN secret is not configured"
+          exit 1
+        fi
+        echo "✅ Required secrets are configured"
+        mvn clean deploy -DskipTests -Dcentral.autoPublish=false -Dgpg.skip=false -s ${{ github.workspace }}/settings.xml
         echo "✅ Dry run completed successfully - artifacts validated and signed"
         
     - name: Deploy to Maven Central
@@ -102,7 +129,7 @@ jobs:
         GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
       run: |
         echo "🚀 Deploying to Maven Central..."
-        mvn clean deploy -DskipTests -Dgpg.skip=false
+        mvn clean deploy -DskipTests -Dgpg.skip=false -s ${{ github.workspace }}/settings.xml
         echo "✅ Deployment completed successfully"
         
     - name: Manual Deploy (Workflow Dispatch)
@@ -114,7 +141,7 @@ jobs:
         GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
       run: |
         echo "🚀 Manual deployment to Maven Central..."
-        mvn clean deploy -DskipTests -Dgpg.skip=false
+        mvn clean deploy -DskipTests -Dgpg.skip=false -s ${{ github.workspace }}/settings.xml
         echo "✅ Manual deployment completed successfully"
         
     - name: Upload build artifacts
