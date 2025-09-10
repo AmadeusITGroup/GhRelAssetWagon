@@ -931,7 +931,11 @@ public class GhRelAssetWagon extends AbstractWagon {
 
         try {
             String sha1 = getSHA1(this.getRepository().getUrl().toString());
-            File zipRepo = new File(System.getProperty("user.home") + "/.ghrelasset/repos/" + sha1);
+            File repoDir = new File(System.getProperty("user.home") + "/.ghrelasset/repos/");
+            if (!repoDir.exists()) {
+                repoDir.mkdirs();
+            }
+            File zipRepo = new File(repoDir, sha1);
             System.out.println("GhRelAssetWagon: stageArtifact - repo: " + zipRepo);
 
             addResourceToZip(zipRepo.getAbsolutePath(), source.toString(), destination);

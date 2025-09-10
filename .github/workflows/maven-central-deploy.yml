@@ -74,6 +74,8 @@ jobs:
         git config user.email "actions@github.com"
         
     - name: Run tests
+      env:
+        GH_RELEASE_ASSET_TOKEN: test_token
       run: mvn clean test
       
     - name: Verify build
