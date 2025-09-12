@@ -240,11 +240,6 @@
                         <configuration>
                             <artifacts>
                                 <artifact>
-                                    <file>${project.basedir}/sbom.spdx.json</file>
-                                    <type>json</type>
-                                    <classifier>sbom-spdx</classifier>
-                                </artifact>
-                                <artifact>
                                     <file>${project.basedir}/sbom.cyclonedx.json</file>
                                     <type>json</type>
                                     <classifier>sbom-cyclonedx</classifier>
