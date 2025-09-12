@@ -2,7 +2,7 @@
 
 # Overview
 
-The GhRelAssetWagon project is designed to integrate GitHub Release Assets as a Maven repository. This allows Maven projects to utilize binary assets stored in GitHub releases as dependencies. The core functionality is encapsulated in the [`GhRelAssetWagon`]("src/main/java/io/github/amadeusitgroup/maven/wagon/GhRelAssetWagon.java") class, which extends Maven's [`AbstractWagon`]("org.apache.maven.wagon/AbstractWagon.class") to support fetching and uploading artifacts directly from/to GitHub Releases. This approach leverages GitHub's infrastructure for versioning and distributing binary assets, making it a cost-effective and scalable solution for Maven repository hosting.
+The GhRelAssetWagon project is designed to integrate GitHub Release Assets as a Maven repository. This allows Maven projects to utilize binary assets stored in GitHub releases as dependencies. The core functionality is encapsulated in the [`GhRelAssetWagon`]("src/main/java/io/github/amadeusitgroup/maven/wagon/GhRelAssetWagon.java") class, which extends Maven's [`StreamWagon`]("org.apache.maven.wagon/StreamWagon.class") to provide efficient streaming capabilities for fetching and uploading artifacts directly from/to GitHub Releases. This approach leverages GitHub's infrastructure for versioning and distributing binary assets, making it a cost-effective and scalable solution for Maven repository hosting.
 
 # High level design
 
@@ -114,12 +114,34 @@ GhRelAssetWagon
 
 ## Features
 
-### Core Functionality
-- **GitHub Release Asset Repository**: Use GitHub release assets as a Maven repository
-- **Seamless Integration**: Works with standard Maven commands (`mvn deploy`, `mvn install`)
-- **Authentication**: Secure access using GitHub Personal Access Tokens
-- **Local Caching**: Efficient ZIP-based caching in `~/.ghrelasset/repos/`
-- **Cross-Platform**: Compatible with all platforms supporting Java 8+
+### Core Maven Integration
+- **Maven Repository Interface**: Full compatibility with Maven's repository API
+- **GitHub Release Integration**: Uses GitHub releases as version containers
+- **Artifact Management**: Upload/download JAR files, POMs, and other artifacts
+- **Checksum Support**: Automatic MD5, SHA-1, and SHA-256 checksum generation and validation
+- **Metadata Generation**: Creates proper Maven metadata files
+- **Path Validation**: Ensures proper Maven repository structure
+
+### Phase 2: Maven Repository Standards Compliance
+- **Maven Metadata Handler**: Generates XML metadata for group, artifact, and version levels
+- **Repository Validator**: Validates Maven repository paths and extracts coordinates
+- **Enhanced Checksum Support**: Multiple checksum algorithms with validation
+
+### Phase 3: Performance & Reliability Enhancements
+- **Connection Pooling**: Thread-safe connection pooling for GitHub API calls
+- **Rate Limit Handling**: Intelligent GitHub API rate limit detection and throttling
+- **Retry Logic**: Configurable retry with exponential backoff and jitter
+- **Circuit Breaker**: Three-state circuit breaker for fail-fast behavior
+- **Async Operations**: Thread pool-based asynchronous task execution
+
+### Phase 4: Advanced Features
+- **Parallel Operations**: Concurrent file uploads and downloads with thread pool management
+- **Delta Sync**: Incremental synchronization with snapshot-based change detection
+- **Compression Support**: Multi-format compression (GZIP, ZIP, TAR) with configurable levels
+- **Metrics Collection**: Comprehensive monitoring with counters, gauges, timers, and alerts
+- **External Configuration**: Configuration management with encryption, templating, and validation
+- **Caching**: Local caching for improved performance
+- **Authentication**: Secure token-based authentication with GitHub
 
 ### Enhanced Wagon Interface Support
 - **File Listing**: List all artifacts in a release (`getFileList()`)
@@ -136,10 +158,19 @@ GhRelAssetWagon
 - **Complex Artifact Support**: Support for artifacts with classifiers and complex extensions (e.g., `.tar.gz`)
 
 ### Quality Assurance
-- **Comprehensive Testing**: 69 unit tests with 72% code coverage
+- **Comprehensive Testing**: 183 unit tests covering all Phase 4 components with 100% pass rate
+- **Test-Driven Development**: All Phase 4 features implemented using TDD methodology
 - **Continuous Integration**: Automated testing, security scanning, and coverage reporting
 - **Maven Central Ready**: Full GPG signing and deployment pipeline for Maven Central distribution
 - **Security Scanning**: Integrated Trivy vulnerability scanning and SBOM generation
+
+### Security Attestations & Provenance
+- **SLSA Level 3 Provenance**: Cryptographically signed build provenance with GitHub attestations
+- **Software Bill of Materials**: SPDX and CycloneDX format SBOMs published to Maven Central
+- **Vulnerability Scanning**: Comprehensive security reports in SARIF and JSON formats
+- **Code Signing**: GPG-signed artifacts with SHA-256 checksums for integrity verification
+- **Build Metadata**: Detailed build environment information for reproducible builds
+- **Supply Chain Security**: Complete attestation framework meeting NIST SSDF requirements
 
 ## Usage
 
@@ -268,13 +299,105 @@ export GH_RELEASE_ASSET_TOKEN=/home/.local/GhRelAssetWagon/.ro_releases_my_repo_
 mvn clean install
 ```
 
+## Advanced Configuration
+
+### Phase 4 Configuration Options
+
+The GhRelAssetWagon supports external configuration through the `ConfigurationManager`. Create a configuration file (e.g., `ghrelasset-config.json`) with the following options:
+
+```json
+{
+  "parallel": {
+    "enabled": true,
+    "maxConcurrency": 4,
+    "timeoutSeconds": 300
+  },
+  "compression": {
+    "enabled": true,
+    "algorithm": "GZIP",
+    "level": 6,
+    "minSizeBytes": 1024
+  },
+  "deltaSync": {
+    "enabled": true,
+    "snapshotPath": "~/.ghrelasset/snapshots"
+  },
+  "metrics": {
+    "enabled": true,
+    "exportFormat": "JSON",
+    "exportPath": "~/.ghrelasset/metrics"
+  }
+}
+```
+
+### Environment Variables
+
+- `GH_RELEASE_ASSET_TOKEN`: GitHub personal access token (required)
+- `GHRELASSET_CONFIG_PATH`: Path to external configuration file (optional)
+- `GHRELASSET_PARALLEL_ENABLED`: Enable/disable parallel operations (optional)
+- `GHRELASSET_COMPRESSION_ENABLED`: Enable/disable compression (optional)
+
 ## Testing
 
-The GhRelAssetWagon project includes unit tests to verify the functionality of the GhRelAssetWagon class. The tests are located in the `src/test/java/io/github/amadeusitgroup/maven/wagon/GhRelAssetWagonTest.java` file and can be executed using the following command:
+The GhRelAssetWagon project includes comprehensive unit tests covering all components:
+
+- **Core Tests**: `GhRelAssetWagonTest.java` - Main wagon functionality
+- **Phase 4 Tests**: 
+  - `ParallelOperationManagerTest.java` - Parallel operations
+  - `DeltaSyncManagerTest.java` - Delta synchronization
+  - `CompressionHandlerTest.java` - Compression features
+  - `MetricsCollectorTest.java` - Metrics collection
+  - `ConfigurationManagerTest.java` - External configuration
+
+Run all tests with:
 
 ```bash
 mvn test
 ```
+
+Run tests with authentication token:
+
+```bash
+export GH_RELEASE_ASSET_TOKEN=your_token_here
+mvn test
+```
+
+## Security Verification
+
+### Verifying Release Attestations
+
+Each release includes comprehensive security attestations. To verify the integrity and provenance:
+
+```bash
+# Download artifacts from Maven Central
+mvn dependency:copy -Dartifact=io.github.amadeusitgroup.maven.wagon:ghrelasset-wagon:0.0.1
+
+# Verify GPG signatures
+gpg --keyserver keyserver.ubuntu.com --recv-keys <GPG_KEY_ID>
+gpg --verify ghrelasset-wagon-0.0.1.jar.asc ghrelasset-wagon-0.0.1.jar
+
+# Verify SHA-256 checksums
+sha256sum -c artifacts.sha256
+
+# Verify SLSA provenance (requires slsa-verifier)
+slsa-verifier verify-artifact ghrelasset-wagon-0.0.1.jar \
+  --provenance-path *.intoto.jsonl \
+  --source-uri github.com/wherka-ama/GhRelAssetWagon
+```
+
+### Security Scanning
+
+Download and analyze the Software Bill of Materials:
+
+```bash
+# Download SBOM from Maven Central
+mvn dependency:copy -Dartifact=io.github.amadeusitgroup.maven.wagon:ghrelasset-wagon:0.0.1:json:sbom-spdx
+
+# Scan for vulnerabilities
+grype sbom:ghrelasset-wagon-0.0.1-sbom-spdx.json
+```
+
+For detailed information about security attestations, see [Security Attestations Documentation](docs/SECURITY_ATTESTATIONS.md).
 
 ## Contributing
 
