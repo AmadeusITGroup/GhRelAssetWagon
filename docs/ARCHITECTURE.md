@@ -2,17 +2,24 @@
 
 ## Overview
 
-GhRelAssetWagon is a Maven Wagon provider extension that enables GitHub Release Assets to be used as a Maven repository. It extends Apache Maven's `AbstractWagon` class to support the `ghrelasset://` protocol scheme, allowing Maven projects to publish and consume artifacts directly from GitHub releases.
+GhRelAssetWagon is a Maven Wagon provider extension that enables GitHub Release Assets to be used as a Maven repository. It extends Apache Maven's `StreamWagon` class to support the `ghrelasset://` protocol scheme, providing efficient streaming capabilities for artifact uploads and downloads directly from GitHub releases.
 
 ## Core Methods
 
-The wagon implements the essential AbstractWagon methods:
+The wagon implements the essential StreamWagon methods for efficient streaming operations:
 
-### Basic Operations
+### StreamWagon Implementation
+- `fillInputData(InputData)` - Configures input streams for efficient artifact downloads
+- `fillOutputData(OutputData)` - Configures output streams for efficient artifact uploads
+- `closeConnection()` - Processes queued uploads and closes connections
+- `setTimeout(int)` / `getTimeout()` - Connection timeout configuration
+- `setReadTimeout(int)` / `getReadTimeout()` - Read timeout configuration
+- `setInteractive(boolean)` / `isInteractive()` - Interactive mode configuration
+
+### Legacy Operations (maintained for compatibility)
 - `get(String, File)` - Downloads artifacts from GitHub release assets
 - `put(File, String)` - Stages artifacts for upload to GitHub releases
 - `openConnectionInternal()` - Establishes authentication and downloads repository cache
-- `closeConnection()` - Uploads staged artifacts to GitHub release
 
 ### Enhanced Wagon Interface Methods (Phase 1)
 - `getFileList(String)` - Lists all files in a GitHub release directory
@@ -62,10 +69,36 @@ graph TB
 
 ### 1. GhRelAssetWagon Class
 - **Package**: `io.github.amadeusitgroup.maven.wagon`
-- **Extends**: `org.apache.maven.wagon.AbstractWagon`
-- **Purpose**: Main implementation of the wagon provider
+- **Extends**: `org.apache.maven.wagon.StreamWagon`
+- **Purpose**: Main implementation of the wagon provider with streaming capabilities and Phase 4 advanced features
 
-### 2. Service Registration
+#### StreamWagon Architecture Benefits
+- **Memory Efficiency**: Streams large artifacts without loading entire files into memory
+- **Progress Reporting**: Integrated transfer event system for real-time upload/download progress
+- **Timeout Configuration**: Comprehensive timeout management for connection and read operations
+- **Temporary File Management**: Efficient handling of upload staging with automatic cleanup
+- **Maven Compliance**: Full compatibility with Maven's preferred streaming architecture
+
+### 2. Phase 2: Maven Repository Standards Compliance
+- **MavenMetadataHandler**: Generates Maven metadata XML files for group, artifact, and version levels
+- **ChecksumHandler**: Handles MD5, SHA-1, and SHA-256 checksum generation and validation
+- **RepositoryValidator**: Validates Maven repository paths and extracts coordinates
+
+### 3. Phase 3: Performance & Reliability Enhancements
+- **ConnectionPoolManager**: Thread-safe connection pooling for GitHub API calls
+- **RateLimitHandler**: GitHub API rate limit detection and intelligent throttling
+- **RetryHandler**: Configurable retry logic with exponential backoff and jitter
+- **CircuitBreakerHandler**: Three-state circuit breaker for fail-fast behavior
+- **AsyncOperationManager**: Thread pool-based async task execution
+
+### 4. Phase 4: Advanced Features
+- **ParallelOperationManager**: Concurrent file operations with thread pool management
+- **DeltaSyncManager**: Incremental synchronization with snapshot-based change detection
+- **CompressionHandler**: File compression/decompression with multiple algorithms
+- **MetricsCollector**: Comprehensive monitoring with counters, gauges, timers, and alerts
+- **ConfigurationManager**: External configuration with encryption, templating, and validation
+
+### 5. Service Registration
 - **Plexus Component**: `META-INF/plexus/components.xml`
 - **Service Provider**: `META-INF/services/org.apache.maven.wagon.Wagon`
 - **Role Hint**: `ghrelasset`
@@ -97,6 +130,36 @@ Local caching using SHA-1 hashed directories provides efficient artifact storage
 GitHub API interactions use a builder-like approach for constructing requests.
 
 ## Data Flow
+
+### Enhanced Upload Process (put method)
+1. **Path Validation**: Validate Maven repository path format
+2. **Coordinate Extraction**: Extract groupId, artifactId, version from path
+3. **Configuration Loading**: Load external configuration and apply overrides
+4. **Delta Sync Check**: Compare with previous snapshot to detect changes
+5. **Compression**: Apply compression if enabled and file meets criteria
+6. **Release Management**: Create or locate GitHub release for version
+7. **Parallel Upload**: Use thread pool for concurrent asset uploads when beneficial
+8. **Asset Upload**: Upload file as GitHub release asset with retry logic
+9. **Checksum Generation**: Generate and upload MD5/SHA-1/SHA-256 checksums
+10. **Metadata Generation**: Create/update Maven metadata files
+11. **Metadata Upload**: Upload metadata as release assets
+12. **Metrics Collection**: Record upload metrics (timing, size, success/failure)
+13. **Snapshot Update**: Update delta sync snapshot with new file state
+
+### Enhanced Download Process (get method)
+1. **Path Resolution**: Resolve Maven path to GitHub release/asset
+2. **Asset Discovery**: Find matching asset in release with circuit breaker protection
+3. **Parallel Download**: Use thread pool for concurrent downloads when beneficial
+4. **Content Retrieval**: Download asset content via GitHub API with rate limiting
+5. **Decompression**: Decompress content if compressed format detected
+6. **Local Storage**: Save content to local file system
+7. **Metrics Collection**: Record download metrics
+
+### Directory Operations with Advanced Features
+- **putDirectory**: Recursively upload with delta sync, parallel processing, and compression
+- **getDirectory**: Recursively download with parallel processing and decompression
+- **Batch Processing**: Handle multiple files with connection pooling and rate limiting
+- **Progress Tracking**: Real-time progress monitoring and cancellation support
 
 ### Artifact Download Flow
 ```mermaid
@@ -342,18 +405,47 @@ The wagon includes extensive logging for troubleshooting:
 
 ## Future Enhancements
 
-### Potential Improvements
-- Parallel download support
-- Advanced caching strategies
-- Batch operation support
-- Configuration file support
-- Maven settings.xml integration
+### Phase 4 Features (Implemented)
+- ✅ **Parallel Operations**: Concurrent uploads and downloads with thread pool management
+- ✅ **Delta Sync**: Incremental synchronization with snapshot-based change detection
+- ✅ **Compression Support**: Multi-format compression (GZIP, ZIP, TAR) with configurable levels
+- ✅ **Metrics Collection**: Comprehensive monitoring with counters, gauges, timers, and alerts
+- ✅ **External Configuration**: Configuration management with encryption, templating, and validation
+
+### Potential Future Improvements
+- Enhanced parallel download optimization
+- Advanced caching strategies with TTL and eviction policies
+- Batch operation APIs for bulk artifact management
+- Maven settings.xml integration for centralized configuration
+- WebSocket-based real-time progress notifications
+- Multi-repository synchronization support
 
 ### API Evolution
-- Support for newer GitHub API versions
-- Enhanced error reporting
-- Metrics and monitoring integration
+- Support for newer GitHub API versions (GraphQL integration)
+- Enhanced error reporting with structured error codes
+- Integration with observability platforms (Prometheus, Grafana)
+- Support for GitHub Enterprise Server
+- Advanced authentication methods (GitHub Apps, SAML)
+
+## StreamWagon Migration Benefits
+
+The migration from `AbstractWagon` to `StreamWagon` provides significant architectural improvements:
+
+### Performance Enhancements
+- **Memory Efficiency**: Large artifacts are streamed without loading entire files into memory
+- **Reduced Memory Footprint**: Temporary file management with automatic cleanup
+- **Concurrent Operations**: Better support for parallel uploads and downloads
+
+### Maven Integration
+- **Native Streaming Support**: Full compatibility with Maven's preferred streaming architecture
+- **Progress Reporting**: Integrated transfer event system for real-time progress updates
+- **Timeout Management**: Comprehensive timeout configuration for connection and read operations
+
+### Developer Experience
+- **IDE Integration**: Better progress reporting in Maven-aware IDEs
+- **Error Handling**: Improved error reporting and recovery mechanisms
+- **Configuration Flexibility**: Enhanced timeout and interactive mode configuration
 
 ## Conclusion
 
-GhRelAssetWagon provides a robust, secure, and efficient mechanism for using GitHub Release Assets as Maven repositories. Its architecture follows Maven conventions while adding powerful GitHub integration capabilities, making it an ideal solution for organizations wanting to leverage GitHub's infrastructure for Maven artifact distribution.
+GhRelAssetWagon provides a robust, secure, and efficient mechanism for using GitHub Release Assets as Maven repositories. With the StreamWagon migration, it now offers enhanced streaming capabilities, better memory management, and improved Maven integration. Its architecture follows Maven conventions while adding powerful GitHub integration capabilities, making it an ideal solution for organizations wanting to leverage GitHub's infrastructure for Maven artifact distribution.
