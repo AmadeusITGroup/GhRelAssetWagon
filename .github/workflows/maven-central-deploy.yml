@@ -1,8 +1,8 @@
 name: Deploy to Maven Central
 
 on:
-  release:
-    types: [created]
+  # release:
+  #   types: [created]
   workflow_dispatch:
     inputs:
       dry_run:
