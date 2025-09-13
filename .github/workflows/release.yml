@@ -89,7 +89,7 @@ jobs:
         GH_RELEASE_ASSET_TOKEN: test_token
       run: mvn clean test
       
-    - name: Build artifacts (without signing)
+    - name: Build and package artifacts (without signing)
       run: mvn clean verify -DskipTests -Dgpg.skip=true
         
     - name: Generate comprehensive SBOM
@@ -166,9 +166,36 @@ jobs:
         EOF
         
     - name: Sign all artifacts
-      run: mvn gpg:sign -Dgpg.skip=false
       env:
         GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      run: |
+        # Sign JAR artifacts directly using gpg command
+        for jar_file in target/*.jar; do
+          if [ -f "$jar_file" ]; then
+            gpg --batch --yes --pinentry-mode loopback \
+              --passphrase "${GPG_PASSPHRASE}" \
+              --armor --detach-sign "$jar_file"
+            echo "✅ Signed $(basename $jar_file)"
+          fi
+        done
+        
+        # Sign POM file
+        if [ -f "pom.xml" ]; then
+          gpg --batch --yes --pinentry-mode loopback \
+            --passphrase "${GPG_PASSPHRASE}" \
+            --armor --detach-sign "pom.xml"
+          echo "✅ Signed pom.xml"
+        fi
+        
+        # Sign additional files (SBOM, vulnerability report, metadata)
+        for file in sbom.spdx.json sbom.cyclonedx.json vulnerability-report.json build-metadata.json; do
+          if [ -f "$file" ]; then
+            gpg --batch --yes --pinentry-mode loopback \
+              --passphrase "${GPG_PASSPHRASE}" \
+              --armor --detach-sign "$file"
+            echo "✅ Signed $file"
+          fi
+        done
         
     - name: Parse test results and coverage
       id: test-results
