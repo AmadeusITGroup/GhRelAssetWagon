@@ -165,29 +165,14 @@ jobs:
         }
         EOF
         
-    - name: Sign all artifacts
+    - name: Sign all artifacts with Maven GPG plugin
       env:
         GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
       run: |
-        # Sign JAR artifacts directly using gpg command
-        for jar_file in target/*.jar; do
-          if [ -f "$jar_file" ]; then
-            gpg --batch --yes --pinentry-mode loopback \
-              --passphrase "${GPG_PASSPHRASE}" \
-              --armor --detach-sign "$jar_file"
-            echo "✅ Signed $(basename $jar_file)"
-          fi
-        done
+        # Run Maven verify with GPG signing enabled to create POM in target/ and sign all artifacts
+        mvn verify -DskipTests -Dgpg.skip=false -Dgpg.passphrase="${GPG_PASSPHRASE}"
         
-        # Sign POM file
-        if [ -f "pom.xml" ]; then
-          gpg --batch --yes --pinentry-mode loopback \
-            --passphrase "${GPG_PASSPHRASE}" \
-            --armor --detach-sign "pom.xml"
-          echo "✅ Signed pom.xml"
-        fi
-        
-        # Sign additional files (SBOM, vulnerability report, metadata)
+        # Sign additional files (SBOM, vulnerability report, metadata) that Maven doesn't handle
         for file in sbom.spdx.json sbom.cyclonedx.json vulnerability-report.json build-metadata.json; do
           if [ -f "$file" ]; then
             gpg --batch --yes --pinentry-mode loopback \
