@@ -89,10 +89,8 @@ jobs:
         GH_RELEASE_ASSET_TOKEN: test_token
       run: mvn clean test
       
-    - name: Build and sign artifacts
-      run: mvn clean verify -DskipTests -Dgpg.skip=false
-      env:
-        GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+    - name: Build artifacts (without signing)
+      run: mvn clean verify -DskipTests -Dgpg.skip=true
         
     - name: Generate comprehensive SBOM
       uses: anchore/sbom-action@v0
@@ -135,6 +133,42 @@ jobs:
         format: 'json'
         output: 'vulnerability-report.json'
         severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+        
+    - name: Create build metadata (placeholder)
+      run: |
+        cat > build-metadata.json << EOF
+        {
+          "build_timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "git_commit": "${{ github.sha }}",
+          "git_ref": "${{ github.ref }}",
+          "workflow_run_id": "${{ github.run_id }}",
+          "workflow_run_number": "${{ github.run_number }}",
+          "runner_os": "${{ runner.os }}",
+          "java_version": "17",
+          "maven_version": "$(mvn --version | head -1 | cut -d' ' -f3)",
+          "test_results": {
+            "total_tests": "pending",
+            "passed_tests": "pending",
+            "failed_tests": "pending",
+            "success_rate": "pending"
+          },
+          "code_coverage": {
+            "instruction_coverage": "pending",
+            "branch_coverage": "pending",
+            "line_coverage": "pending"
+          },
+          "build_environment": {
+            "github_actor": "${{ github.actor }}",
+            "github_repository": "${{ github.repository }}",
+            "github_event_name": "${{ github.event_name }}"
+          }
+        }
+        EOF
+        
+    - name: Sign all artifacts
+      run: mvn gpg:sign -Dgpg.skip=false
+      env:
+        GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         
     - name: Parse test results and coverage
       id: test-results
@@ -220,6 +254,37 @@ jobs:
           echo "line_total=0" >> $GITHUB_OUTPUT
         fi
         
+    - name: Update build metadata with test results
+      run: |
+        cat > build-metadata.json << EOF
+        {
+          "build_timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "git_commit": "${{ github.sha }}",
+          "git_ref": "${{ github.ref }}",
+          "workflow_run_id": "${{ github.run_id }}",
+          "workflow_run_number": "${{ github.run_number }}",
+          "runner_os": "${{ runner.os }}",
+          "java_version": "17",
+          "maven_version": "$(mvn --version | head -1 | cut -d' ' -f3)",
+          "test_results": {
+            "total_tests": "${{ steps.test-results.outputs.total_tests }}",
+            "passed_tests": "${{ steps.test-results.outputs.passed_tests }}",
+            "failed_tests": "${{ steps.test-results.outputs.failed_tests }}",
+            "success_rate": "${{ steps.test-results.outputs.success_rate }}"
+          },
+          "code_coverage": {
+            "instruction_coverage": "${{ steps.test-results.outputs.instruction_coverage }}",
+            "branch_coverage": "${{ steps.test-results.outputs.branch_coverage }}",
+            "line_coverage": "${{ steps.test-results.outputs.line_coverage }}"
+          },
+          "build_environment": {
+            "github_actor": "${{ github.actor }}",
+            "github_repository": "${{ github.repository }}",
+            "github_event_name": "${{ github.event_name }}"
+          }
+        }
+        EOF
+        
     - name: Generate artifact hashes
       id: hash
       run: |
@@ -251,37 +316,6 @@ jobs:
         sbom_hash=$(sha256sum sbom.spdx.json | cut -d' ' -f1)
         echo "hash=$sbom_hash" >> $GITHUB_OUTPUT
         echo "SBOM SHA256: $sbom_hash"
-        
-    - name: Create build metadata
-      run: |
-        cat > build-metadata.json << EOF
-        {
-          "build_timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-          "git_commit": "${{ github.sha }}",
-          "git_ref": "${{ github.ref }}",
-          "workflow_run_id": "${{ github.run_id }}",
-          "workflow_run_number": "${{ github.run_number }}",
-          "runner_os": "${{ runner.os }}",
-          "java_version": "17",
-          "maven_version": "$(mvn --version | head -1 | cut -d' ' -f3)",
-          "test_results": {
-            "total_tests": "${{ steps.test-results.outputs.total_tests }}",
-            "passed_tests": "${{ steps.test-results.outputs.passed_tests }}",
-            "failed_tests": "${{ steps.test-results.outputs.failed_tests }}",
-            "success_rate": "${{ steps.test-results.outputs.success_rate }}"
-          },
-          "code_coverage": {
-            "instruction_coverage": "${{ steps.test-results.outputs.instruction_coverage }}",
-            "branch_coverage": "${{ steps.test-results.outputs.branch_coverage }}",
-            "line_coverage": "${{ steps.test-results.outputs.line_coverage }}"
-          },
-          "build_environment": {
-            "github_actor": "${{ github.actor }}",
-            "github_repository": "${{ github.repository }}",
-            "github_event_name": "${{ github.event_name }}"
-          }
-        }
-        EOF
         
     - name: Generate release summary
       run: |
