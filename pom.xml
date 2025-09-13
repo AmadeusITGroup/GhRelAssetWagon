@@ -245,12 +245,12 @@
                                     <classifier>sbom-cyclonedx</classifier>
                                 </artifact>
                                 <artifact>
-                                    <file>${project.build.directory}/vulnerability-report.json</file>
+                                    <file>${project.basedir}/vulnerability-report.json</file>
                                     <type>json</type>
                                     <classifier>vulnerability-report</classifier>
                                 </artifact>
                                 <artifact>
-                                    <file>${project.build.directory}/build-metadata.json</file>
+                                    <file>${project.basedir}/build-metadata.json</file>
                                     <type>json</type>
                                     <classifier>build-metadata</classifier>
                                 </artifact>
