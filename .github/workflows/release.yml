@@ -475,35 +475,22 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: attestation-artifacts
-        path: ./attestations/
+        path: ./
         
-    - name: Import GPG key
-      env:
-        GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-        GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-      run: |
-        mkdir -p ~/.gnupg
-        chmod 700 ~/.gnupg
-        echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --import 2>&1 | sed 's/<[^>]*>/<***@***.***>/g'
-        KEY_ID=$(gpg --list-secret-keys --keyid-format LONG | grep sec | head -1 | sed 's/.*\/\([A-F0-9]*\).*/\1/')
-        echo "GPG_KEY_ID=$KEY_ID" >> $GITHUB_ENV
-        FINGERPRINT=$(gpg --list-secret-keys --with-colons --fingerprint | grep fpr | head -1 | cut -d: -f10)
-        echo "$FINGERPRINT:6:" | gpg --batch --import-ownertrust
-        echo "use-agent" >> ~/.gnupg/gpg.conf
-        echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
-        echo "batch" >> ~/.gnupg/gpg.conf
-        echo "no-tty" >> ~/.gnupg/gpg.conf
-        echo "default-key $KEY_ID" >> ~/.gnupg/gpg.conf
-        chmod 600 ~/.gnupg/gpg.conf
-        
-    - name: Deploy to Maven Central
+    - name: Deploy to Maven Central using pre-built artifacts
       env:
         MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
         MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
         GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
       run: |
-        echo "🚀 Deploying to Maven Central with attestations..."
-        mvn clean deploy -DskipTests -Dgpg.skip=false -s ${{ github.workspace }}/settings.xml
+        echo "🚀 Deploying pre-built artifacts to Maven Central..."
+        
+        # Use Maven deploy plugin with pre-built artifacts
+        # Skip compilation/packaging phases since artifacts are already built
+        mvn deploy -DskipTests -Dmaven.main.skip=true -Dmaven.test.skip=true \
+          -Dgpg.passphrase="${GPG_PASSPHRASE}" \
+          -s ${{ github.workspace }}/settings.xml
+          
         echo "✅ Deployment completed successfully"
         
   attach-to-release:
