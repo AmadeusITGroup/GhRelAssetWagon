@@ -535,7 +535,6 @@ jobs:
         
     #     echo "✅ All artifacts deployed successfully"
     - name: Deploy to Maven Central
-      if: github.event.inputs.dry_run == 'false'
       env:
         MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
         MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
