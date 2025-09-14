@@ -105,24 +105,22 @@ jobs:
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
         
-    - name: Run tests
+    - name: Build, Test, and Package
       env:
         GH_RELEASE_ASSET_TOKEN: test_token
-      run: mvn clean test
-      
-    - name: Debug Maven settings
       run: |
-        echo "Maven settings location: ${{ github.workspace }}/settings.xml"
-        if [ -f "${{ github.workspace }}/settings.xml" ]; then
-          echo "Settings.xml exists"
-          # Show structure without revealing credentials
-          xmllint --format "${{ github.workspace }}/settings.xml" | grep -E "(server|id)" || echo "No servers found"
-        else
-          echo "Settings.xml not found"
+        echo "🚀 Running Maven build with tests..."
+        mvn clean verify -Dgpg.skip=true
+        echo "✅ Build and tests completed"
+        
+    - name: Validate Maven settings
+      run: |
+        echo "📋 Validating Maven settings..."
+        if [ ! -f "${{ github.workspace }}/settings.xml" ]; then
+          echo "❌ Settings.xml not found"
+          exit 1
         fi
-      
-    - name: Verify build
-      run: mvn clean verify -DskipTests
+        echo "✅ Maven settings validated"
       
     - name: Debug GPG signatures
       run: |
@@ -138,14 +136,37 @@ jobs:
         done
       
     - name: Deploy to Maven Central (Dry Run)
-      if: ${{ github.event.inputs.dry_run == 'true' }}
+      if: github.event.inputs.dry_run == 'true'
       env:
         MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
         MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
-        GPG_KEYNAME: ${{ env.GPG_KEY_ID || 'auto' }}
-        GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
       run: |
-        echo "🔍 Performing dry run - validating artifacts without publishing"
+        echo "🚀 Starting dry run deployment to Maven Central..."
+        
+        # Deploy with retry logic
+        MAX_RETRIES=3
+        RETRY_COUNT=0
+        
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+          echo "Deployment attempt $((RETRY_COUNT + 1))/$MAX_RETRIES..."
+          
+          if mvn clean deploy -DskipTests -Dgpg.skip=false -Pgpg-sign \
+            -DaltDeploymentRepository=local::file:./target/staging-deploy \
+            -s ${{ github.workspace }}/settings.xml; then
+            echo "✅ Dry run deployment successful"
+            break
+          fi
+          
+          RETRY_COUNT=$((RETRY_COUNT + 1))
+          if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+            echo "⚠️ Deployment failed, retrying in 10 seconds..."
+            sleep 10
+          else
+            echo "❌ Deployment failed after $MAX_RETRIES attempts"
+            exit 1
+          fi
+        done
+        
         echo "📋 Checking required secrets..."
         if [ -z "$MAVEN_USERNAME" ]; then
           echo "❌ ERROR: OSSRH_USERNAME secret is not configured"
@@ -161,31 +182,37 @@ jobs:
           exit 1
         fi
         echo "✅ Required secrets are configured"
-        mvn clean deploy -DskipTests -Dcentral.autoPublish=false -Dgpg.skip=false -s ${{ github.workspace }}/settings.xml
-        echo "✅ Dry run completed successfully - artifacts validated and signed"
         
     - name: Deploy to Maven Central
-      if: ${{ github.event_name == 'release' && github.event.action == 'created' }}
+      if: github.event.inputs.dry_run == 'false'
       env:
         MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
         MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
-        GPG_KEYNAME: ${{ env.GPG_KEY_ID || 'auto' }}
-        GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
       run: |
-        echo "🚀 Deploying to Maven Central..."
-        mvn clean deploy -DskipTests -Dgpg.skip=false -s ${{ github.workspace }}/settings.xml
-        echo "✅ Deployment completed successfully"
+        echo "🚀 Starting actual deployment to Maven Central..."
         
-    - name: Manual Deploy (Workflow Dispatch)
-      if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'false' }}
-      env:
-        MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
-        MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
-        GPG_KEYNAME: ${{ env.GPG_KEY_ID || 'auto' }}
-        GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-      run: |
-        echo "🚀 Manual deployment to Maven Central..."
-        mvn clean deploy -DskipTests -Dgpg.skip=false -s ${{ github.workspace }}/settings.xml
+        # Deploy with retry logic
+        MAX_RETRIES=3
+        RETRY_COUNT=0
+        
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+          echo "Deployment attempt $((RETRY_COUNT + 1))/$MAX_RETRIES..."
+          
+          if mvn clean deploy -DskipTests -Dgpg.skip=false \
+            -s ${{ github.workspace }}/settings.xml; then
+            echo "✅ Deployment to Maven Central successful"
+            break
+          fi
+          
+          RETRY_COUNT=$((RETRY_COUNT + 1))
+          if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+            echo "⚠️ Deployment failed, retrying in 10 seconds..."
+            sleep 10
+          else
+            echo "❌ Deployment failed after $MAX_RETRIES attempts"
+            exit 1
+          fi
+        done
         echo "✅ Manual deployment completed successfully"
         
     - name: Upload build artifacts

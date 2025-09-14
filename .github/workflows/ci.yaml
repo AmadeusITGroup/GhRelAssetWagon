@@ -37,12 +37,13 @@ jobs:
         with:
           egress-policy: audit
 
-      - uses: actions/cache@v4
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
         with:
           path: ~/.m2/repository
-          key: maven-${{ hashFiles('**/pom.xml') }}
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
-            maven-
+            ${{ runner.os }}-maven-
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,11 +54,13 @@ jobs:
           java-version: ${{ matrix.java-version }}
           distribution: temurin
 
-      - name: Build with Maven
+      - name: Build and Test with Maven
         env:
           GH_RELEASE_ASSET_TOKEN: test_token
         run: |
+          echo "🚀 Running Maven build and tests..."
           mvn -B clean verify -Dgpg.skip=true
+          echo "✅ Build completed successfully"
 
       - name: Parse Test Results
         id: test-results
