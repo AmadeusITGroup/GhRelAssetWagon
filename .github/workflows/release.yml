@@ -472,69 +472,99 @@ jobs:
         [ -f "target/ghrelasset-wagon-0.0.1-javadoc.jar" ] || { echo "❌ Javadoc JAR not found"; exit 1; }
         echo "✅ All required artifacts present"
         
-    - name: Deploy to Maven Central using pre-built artifacts
+    # - name: Deploy to Maven Central using pre-built artifacts
+    #   env:
+    #     MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+    #     MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
+    #   run: |
+    #     echo "🚀 Deploying pre-built artifacts to Maven Central..."
+        
+    #     # Function to deploy with retry logic
+    #     deploy_with_retry() {
+    #       local file="$1"
+    #       local classifier="$2"
+    #       local max_retries=3
+    #       local retry_count=0
+          
+    #       while [ $retry_count -lt $max_retries ]; do
+    #         echo "Deploying $file (attempt $((retry_count + 1))/$max_retries)..."
+            
+    #         if [ -z "$classifier" ]; then
+    #           # Deploy main JAR with POM
+    #           if mvn deploy:deploy-file \
+    #             -Dfile="$file" \
+    #             -DpomFile=target/ghrelasset-wagon-0.0.1.pom \
+    #             -Durl=https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/ \
+    #             -DrepositoryId=central \
+    #             -s ${{ github.workspace }}/settings.xml; then
+    #             echo "✅ Successfully deployed $file"
+    #             return 0
+    #           fi
+    #         else
+    #           # Deploy classified JAR
+    #           if mvn deploy:deploy-file \
+    #             -Dfile="$file" \
+    #             -DgroupId=io.github.amadeusitgroup.maven.wagon \
+    #             -DartifactId=ghrelasset-wagon \
+    #             -Dversion=0.0.1 \
+    #             -Dpackaging=jar \
+    #             -Dclassifier="$classifier" \
+    #             -Durl=https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/ \
+    #             -DrepositoryId=central \
+    #             -s ${{ github.workspace }}/settings.xml; then
+    #             echo "✅ Successfully deployed $file"
+    #             return 0
+    #           fi
+    #         fi
+            
+    #         retry_count=$((retry_count + 1))
+    #         if [ $retry_count -lt $max_retries ]; then
+    #           echo "⚠️ Deployment failed, retrying in 10 seconds..."
+    #           sleep 10
+    #         fi
+    #       done
+          
+    #       echo "❌ Failed to deploy $file after $max_retries attempts"
+    #       return 1
+    #     }
+        
+    #     # Deploy artifacts with retry logic
+    #     deploy_with_retry "target/ghrelasset-wagon-0.0.1.jar" "" || exit 1
+    #     deploy_with_retry "target/ghrelasset-wagon-0.0.1-sources.jar" "sources" || exit 1
+    #     deploy_with_retry "target/ghrelasset-wagon-0.0.1-javadoc.jar" "javadoc" || exit 1
+        
+    #     echo "✅ All artifacts deployed successfully"
+    - name: Deploy to Maven Central
+      if: github.event.inputs.dry_run == 'false'
       env:
         MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
         MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
       run: |
-        echo "🚀 Deploying pre-built artifacts to Maven Central..."
+        echo "🚀 Starting actual deployment to Maven Central..."
         
-        # Function to deploy with retry logic
-        deploy_with_retry() {
-          local file="$1"
-          local classifier="$2"
-          local max_retries=3
-          local retry_count=0
+        # Deploy with retry logic
+        MAX_RETRIES=3
+        RETRY_COUNT=0
+        
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+          echo "Deployment attempt $((RETRY_COUNT + 1))/$MAX_RETRIES..."
           
-          while [ $retry_count -lt $max_retries ]; do
-            echo "Deploying $file (attempt $((retry_count + 1))/$max_retries)..."
-            
-            if [ -z "$classifier" ]; then
-              # Deploy main JAR with POM
-              if mvn deploy:deploy-file \
-                -Dfile="$file" \
-                -DpomFile=target/ghrelasset-wagon-0.0.1.pom \
-                -Durl=https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/ \
-                -DrepositoryId=central \
-                -s ${{ github.workspace }}/settings.xml; then
-                echo "✅ Successfully deployed $file"
-                return 0
-              fi
-            else
-              # Deploy classified JAR
-              if mvn deploy:deploy-file \
-                -Dfile="$file" \
-                -DgroupId=io.github.amadeusitgroup.maven.wagon \
-                -DartifactId=ghrelasset-wagon \
-                -Dversion=0.0.1 \
-                -Dpackaging=jar \
-                -Dclassifier="$classifier" \
-                -Durl=https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/ \
-                -DrepositoryId=central \
-                -s ${{ github.workspace }}/settings.xml; then
-                echo "✅ Successfully deployed $file"
-                return 0
-              fi
-            fi
-            
-            retry_count=$((retry_count + 1))
-            if [ $retry_count -lt $max_retries ]; then
-              echo "⚠️ Deployment failed, retrying in 10 seconds..."
-              sleep 10
-            fi
-          done
+          if mvn clean deploy -DskipTests -Dgpg.skip=false \
+            -s ${{ github.workspace }}/settings.xml; then
+            echo "✅ Deployment to Maven Central successful"
+            break
+          fi
           
-          echo "❌ Failed to deploy $file after $max_retries attempts"
-          return 1
-        }
-        
-        # Deploy artifacts with retry logic
-        deploy_with_retry "target/ghrelasset-wagon-0.0.1.jar" "" || exit 1
-        deploy_with_retry "target/ghrelasset-wagon-0.0.1-sources.jar" "sources" || exit 1
-        deploy_with_retry "target/ghrelasset-wagon-0.0.1-javadoc.jar" "javadoc" || exit 1
-        
-        echo "✅ All artifacts deployed successfully"
-        
+          RETRY_COUNT=$((RETRY_COUNT + 1))
+          if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+            echo "⚠️ Deployment failed, retrying in 10 seconds..."
+            sleep 10
+          else
+            echo "❌ Deployment failed after $MAX_RETRIES attempts"
+            exit 1
+          fi
+        done
+        echo "✅ Manual deployment completed successfully"    
   attach-to-release:
     needs: [build-and-attest, slsa-provenance, deploy-to-maven-central]
     runs-on: ubuntu-latest
