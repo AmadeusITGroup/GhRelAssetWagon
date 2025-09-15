@@ -534,6 +534,70 @@ jobs:
     #     deploy_with_retry "target/ghrelasset-wagon-0.0.1-javadoc.jar" "javadoc" || exit 1
         
     #     echo "✅ All artifacts deployed successfully"
+    - name: Import GPG key
+      env:
+        GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      run: |
+        # Create GPG directory and set permissions
+        mkdir -p ~/.gnupg
+        chmod 700 ~/.gnupg
+        
+        # Import the GPG key (suppress output to avoid exposing email)
+        echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --import 2>&1 | sed 's/<[^>]*>/<***@***.***>/g'
+        
+        # List keys to verify import and get key ID (mask email for security)
+        echo "Imported GPG keys:"
+        gpg --list-secret-keys --keyid-format LONG | sed 's/<[^>]*>/<***@***.***>/g'
+        
+        # Get the key ID and fingerprint
+        KEY_ID=$(gpg --list-secret-keys --keyid-format LONG | grep sec | head -1 | sed 's/.*\/\([A-F0-9]*\).*/\1/')
+        echo "Using GPG key ID: $KEY_ID"
+        echo "GPG_KEY_ID=$KEY_ID" >> $GITHUB_ENV
+        
+        # Get the full fingerprint for trust import
+        FINGERPRINT=$(gpg --list-secret-keys --with-colons --fingerprint | grep fpr | head -1 | cut -d: -f10)
+        echo "GPG fingerprint: $FINGERPRINT"
+        
+        # Set ultimate trust for the imported key to avoid signature validation issues
+        echo "$FINGERPRINT:6:" | gpg --batch --import-ownertrust
+        
+        # Verify key trust
+        gpg --list-keys --with-colons | grep "^pub" | head -1
+        
+        # Configure GPG for non-interactive use
+        mkdir -p ~/.gnupg
+        chmod 700 ~/.gnupg
+        echo "use-agent" >> ~/.gnupg/gpg.conf
+        echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
+        echo "batch" >> ~/.gnupg/gpg.conf
+        echo "no-tty" >> ~/.gnupg/gpg.conf
+        echo "default-key $KEY_ID" >> ~/.gnupg/gpg.conf
+        
+        # Configure GPG agent
+        echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+        echo "default-cache-ttl 86400" >> ~/.gnupg/gpg-agent.conf
+        echo "max-cache-ttl 86400" >> ~/.gnupg/gpg-agent.conf
+        
+        # Set proper permissions
+        chmod 600 ~/.gnupg/gpg.conf
+        chmod 600 ~/.gnupg/gpg-agent.conf
+        
+        # Restart GPG agent
+        gpg-connect-agent reloadagent /bye || true
+        
+        # Test signing with the exact same parameters Maven will use
+        echo "test" > /tmp/test.txt
+        gpg --detach-sign --armor --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" --default-key "$KEY_ID" --output /tmp/test.asc /tmp/test.txt
+        
+        # Verify the test signature
+        gpg --verify /tmp/test.asc /tmp/test.txt
+        echo "GPG signing test successful - signature verified"
+        
+        # Export public key for verification (useful for debugging)
+        gpg --armor --export "$KEY_ID" > /tmp/public_key.asc
+        echo "Public key exported for verification"
+
     - name: Deploy to Maven Central
       env:
         MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
