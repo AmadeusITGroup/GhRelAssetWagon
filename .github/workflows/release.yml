@@ -563,16 +563,15 @@ jobs:
         VERSION="${{ steps.deploy-version.outputs.version }}"
         echo "📦 Validating required artifacts for version: $VERSION"
         
-        # Note: Downloaded artifacts still have the original version (0.0.1) from build job
-        # The deployment will rebuild with the correct version
-        ORIGINAL_VERSION="0.0.1"  # Version from the build job artifacts
+        # List target directory for diagnostics
+        ls -la target || true
         
-        echo "Checking for artifacts with original version: $ORIGINAL_VERSION"
-        [ -f "target/ghrelasset-wagon-${ORIGINAL_VERSION}.jar" ] || { echo "❌ Main JAR not found"; exit 1; }
-        [ -f "target/ghrelasset-wagon-${ORIGINAL_VERSION}.pom" ] || { echo "❌ POM not found"; exit 1; }
-        [ -f "target/ghrelasset-wagon-${ORIGINAL_VERSION}-sources.jar" ] || { echo "❌ Sources JAR not found"; exit 1; }
-        [ -f "target/ghrelasset-wagon-${ORIGINAL_VERSION}-javadoc.jar" ] || { echo "❌ Javadoc JAR not found"; exit 1; }
-        echo "✅ All required artifacts present (will be rebuilt with version $VERSION)"
+        # Validate that build artifacts for the computed release version are present
+        [ -f "target/ghrelasset-wagon-${VERSION}.jar" ] || { echo "❌ Main JAR not found"; exit 1; }
+        [ -f "target/ghrelasset-wagon-${VERSION}.pom" ] || { echo "❌ POM not found"; exit 1; }
+        [ -f "target/ghrelasset-wagon-${VERSION}-sources.jar" ] || { echo "❌ Sources JAR not found"; exit 1; }
+        [ -f "target/ghrelasset-wagon-${VERSION}-javadoc.jar" ] || { echo "❌ Javadoc JAR not found"; exit 1; }
+        echo "✅ All required artifacts present"
         
     # - name: Deploy to Maven Central using pre-built artifacts
     #   env:
