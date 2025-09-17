@@ -562,11 +562,17 @@ jobs:
       run: |
         VERSION="${{ steps.deploy-version.outputs.version }}"
         echo "📦 Validating required artifacts for version: $VERSION"
-        [ -f "target/ghrelasset-wagon-${VERSION}.jar" ] || { echo "❌ Main JAR not found"; exit 1; }
-        [ -f "target/ghrelasset-wagon-${VERSION}.pom" ] || { echo "❌ POM not found"; exit 1; }
-        [ -f "target/ghrelasset-wagon-${VERSION}-sources.jar" ] || { echo "❌ Sources JAR not found"; exit 1; }
-        [ -f "target/ghrelasset-wagon-${VERSION}-javadoc.jar" ] || { echo "❌ Javadoc JAR not found"; exit 1; }
-        echo "✅ All required artifacts present"
+        
+        # Note: Downloaded artifacts still have the original version (0.0.1) from build job
+        # The deployment will rebuild with the correct version
+        ORIGINAL_VERSION="0.0.1"  # Version from the build job artifacts
+        
+        echo "Checking for artifacts with original version: $ORIGINAL_VERSION"
+        [ -f "target/ghrelasset-wagon-${ORIGINAL_VERSION}.jar" ] || { echo "❌ Main JAR not found"; exit 1; }
+        [ -f "target/ghrelasset-wagon-${ORIGINAL_VERSION}.pom" ] || { echo "❌ POM not found"; exit 1; }
+        [ -f "target/ghrelasset-wagon-${ORIGINAL_VERSION}-sources.jar" ] || { echo "❌ Sources JAR not found"; exit 1; }
+        [ -f "target/ghrelasset-wagon-${ORIGINAL_VERSION}-javadoc.jar" ] || { echo "❌ Javadoc JAR not found"; exit 1; }
+        echo "✅ All required artifacts present (will be rebuilt with version $VERSION)"
         
     # - name: Deploy to Maven Central using pre-built artifacts
     #   env:
@@ -694,12 +700,29 @@ jobs:
         gpg --armor --export "$KEY_ID" > /tmp/public_key.asc
         echo "Public key exported for verification"
 
+    - name: Update Maven version for deployment
+      run: |
+        echo "Updating Maven version to: ${{ steps.deploy-version.outputs.version }}"
+        mvn -B versions:set -DnewVersion=${{ steps.deploy-version.outputs.version }} -DgenerateBackupPoms=false
+        
+        # Verify version was set correctly
+        ACTUAL_VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+        echo "Maven version set to: $ACTUAL_VERSION"
+        
+        if [ "$ACTUAL_VERSION" != "${{ steps.deploy-version.outputs.version }}" ]; then
+          echo "❌ Version mismatch: expected ${{ steps.deploy-version.outputs.version }}, got $ACTUAL_VERSION"
+          exit 1
+        fi
+        
+        echo "✅ Maven version updated successfully for deployment"
+
     - name: Deploy to Maven Central
       env:
         MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
         MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
       run: |
         echo "🚀 Starting actual deployment to Maven Central..."
+        echo "Deploying version: ${{ steps.deploy-version.outputs.version }}"
         
         # Deploy with retry logic
         MAX_RETRIES=3
