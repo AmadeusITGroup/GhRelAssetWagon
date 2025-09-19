@@ -29,6 +29,8 @@ jobs:
     outputs:
       artifact-hashes: ${{ steps.hash.outputs.hashes }}
       sbom-hash: ${{ steps.sbom-hash.outputs.hash }}
+      version: ${{ steps.version.outputs.version }}
+      build_timestamp: ${{ steps.ts.outputs.build_timestamp }}
       total_tests: ${{ steps.test-results.outputs.total_tests }}
       passed_tests: ${{ steps.test-results.outputs.passed_tests }}
       failed_tests: ${{ steps.test-results.outputs.failed_tests }}
@@ -47,6 +49,11 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        
+    - name: Install tooling (xmllint, bc)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libxml2-utils bc
         
     - name: Determine version
       id: version
@@ -77,6 +84,11 @@ jobs:
         fi
         
         echo "✅ Version format is valid: $VERSION"
+        
+    - name: Compute build timestamp
+      id: ts
+      run: |
+        echo "build_timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
         
     - name: Update Maven version
       run: |
@@ -228,7 +240,7 @@ jobs:
       id: test-results
       run: |
         # Parse test results
-        if [ -f "target/surefire-reports/TEST-"*.xml ]; then
+        if ls target/surefire-reports/TEST-*.xml 1> /dev/null 2>&1; then
           TOTAL_TESTS=$(xmllint --xpath "sum(//testsuite/@tests)" target/surefire-reports/TEST-*.xml 2>/dev/null || echo "0")
           FAILURES=$(xmllint --xpath "sum(//testsuite/@failures)" target/surefire-reports/TEST-*.xml 2>/dev/null || echo "0")
           ERRORS=$(xmllint --xpath "sum(//testsuite/@errors)" target/surefire-reports/TEST-*.xml 2>/dev/null || echo "0")
@@ -573,66 +585,6 @@ jobs:
         [ -f "target/ghrelasset-wagon-${VERSION}-javadoc.jar" ] || { echo "❌ Javadoc JAR not found"; exit 1; }
         echo "✅ All required artifacts present"
         
-    # - name: Deploy to Maven Central using pre-built artifacts
-    #   env:
-    #     MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
-    #     MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
-    #   run: |
-    #     echo "🚀 Deploying pre-built artifacts to Maven Central..."
-        
-    #     # Function to deploy with retry logic
-    #     deploy_with_retry() {
-    #       local file="$1"
-    #       local classifier="$2"
-    #       local max_retries=3
-    #       local retry_count=0
-          
-    #       while [ $retry_count -lt $max_retries ]; do
-    #         echo "Deploying $file (attempt $((retry_count + 1))/$max_retries)..."
-            
-    #         if [ -z "$classifier" ]; then
-    #           # Deploy main JAR with POM
-    #           if mvn deploy:deploy-file \
-    #             -Dfile="$file" \
-    #             -DpomFile=target/ghrelasset-wagon-0.0.1.pom \
-    #             -Durl=https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/ \
-    #             -DrepositoryId=central \
-    #             -s ${{ github.workspace }}/settings.xml; then
-    #             echo "✅ Successfully deployed $file"
-    #             return 0
-    #           fi
-    #         else
-    #           # Deploy classified JAR
-    #           if mvn deploy:deploy-file \
-    #             -Dfile="$file" \
-    #             -DgroupId=io.github.amadeusitgroup.maven.wagon \
-    #             -DartifactId=ghrelasset-wagon \
-    #             -Dversion=0.0.1 \
-    #             -Dpackaging=jar \
-    #             -Dclassifier="$classifier" \
-    #             -Durl=https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/ \
-    #             -DrepositoryId=central \
-    #             -s ${{ github.workspace }}/settings.xml; then
-    #             echo "✅ Successfully deployed $file"
-    #             return 0
-    #           fi
-    #         fi
-            
-    #         retry_count=$((retry_count + 1))
-    #         if [ $retry_count -lt $max_retries ]; then
-    #           echo "⚠️ Deployment failed, retrying in 10 seconds..."
-    #           sleep 10
-    #         fi
-    #       done
-          
-    #       echo "❌ Failed to deploy $file after $max_retries attempts"
-    #       return 1
-    #     }
-        
-    #     # Deploy artifacts with retry logic
-    #     deploy_with_retry "target/ghrelasset-wagon-0.0.1.jar" "" || exit 1
-    #     deploy_with_retry "target/ghrelasset-wagon-0.0.1-sources.jar" "sources" || exit 1
-    #     deploy_with_retry "target/ghrelasset-wagon-0.0.1-javadoc.jar" "javadoc" || exit 1
         
     #     echo "✅ All artifacts deployed successfully"
     - name: Import GPG key
@@ -779,61 +731,57 @@ jobs:
           attestations/build-metadata.json
           slsa/*.intoto.jsonl
         body: |
-          ## 🚀 Release Build Summary
-          
-          **Build Information:**
-          - **Build Timestamp:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          ## 🚀 Release Summary
+
+          ### 🏗️ Build Information
+          - **Build Timestamp:** ${{ needs.build-and-attest.outputs.build_timestamp }}
           - **Git Commit:** ${{ github.sha }}
           - **Workflow Run:** [${{ github.run_number }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
           - **Java Version:** 17
-          - **Maven Version:** $(mvn --version | head -1 | cut -d' ' -f3)
-          
-          ## 🧪 Test Results
-          
-          | Metric | Value |
-          |--------|-------|
-          | Total Tests | ${{ needs.build-and-attest.outputs.total_tests || 'N/A' }} |
-          | Passed | ${{ needs.build-and-attest.outputs.passed_tests || 'N/A' }} |
-          | Failed | ${{ needs.build-and-attest.outputs.failed_tests || 'N/A' }} |
-          | Success Rate | ${{ needs.build-and-attest.outputs.success_rate || 'N/A' }} |
-          
-          ## 📈 Code Coverage
-          
-          | Coverage Type | Percentage |
-          |---------------|------------|
-          | Instructions | ${{ needs.build-and-attest.outputs.instruction_coverage || 'N/A' }} |
-          | Branches | ${{ needs.build-and-attest.outputs.branch_coverage || 'N/A' }} |
-          | Lines | ${{ needs.build-and-attest.outputs.line_coverage || 'N/A' }} |
-          
-          ## 🔒 Security Attestations
-          
+
+          ### 🧪 Test Results
+          - **Total Tests:** ${{ needs.build-and-attest.outputs.total_tests }}
+          - **Passed:** ${{ needs.build-and-attest.outputs.passed_tests }}
+          - **Failed:** ${{ needs.build-and-attest.outputs.failed_tests }}
+          - **Success Rate:** ${{ needs.build-and-attest.outputs.success_rate }}
+
+          ### 📈 Code Coverage
+          - **Instructions:** ${{ needs.build-and-attest.outputs.instruction_coverage }}
+          - **Branches:** ${{ needs.build-and-attest.outputs.branch_coverage }}
+          - **Lines:** ${{ needs.build-and-attest.outputs.line_coverage }}
+
+          ### 📦 Maven Central
+          - **Coordinates:** `io.github.amadeusitgroup.maven.wagon:ghrelasset-wagon:${{ needs.build-and-attest.outputs.version }}`
+          - **Artifact:** https://central.sonatype.com/artifact/io.github.amadeusitgroup.maven.wagon/ghrelasset-wagon/${{ needs.build-and-attest.outputs.version }}
+
+          ### 🔒 Security Attestations
           This release includes comprehensive security attestations and provenance information:
-          
-          ### 📋 Software Bill of Materials (SBOM)
-          - **SPDX Format**: sbom.spdx.json
-          - **CycloneDX Format**: sbom.cyclonedx.json
-          
-          ### 🛡️ Security Scanning
-          - **Vulnerability Report**: vulnerability-report.json
-          - **SARIF Report**: trivy-results.sarif
-          
-          ### 🔐 Provenance & Attestations
-          - **SLSA Provenance**: *.intoto.jsonl (SLSA Level 3)
-          - **Build Metadata**: build-metadata.json
-          - **Artifact Hashes**: *.sha256
-          
-          ### ✍️ Code Signing
+
+          #### 📋 Software Bill of Materials (SBOM)
+          - **SPDX Format:** sbom.spdx.json
+          - **CycloneDX Format:** sbom.cyclonedx.json
+
+          #### 🛡️ Security Scanning
+          - **Vulnerability Report:** vulnerability-report.json
+          - **SARIF Report:** trivy-results.sarif
+
+          #### 🔐 Provenance & Attestations
+          - **SLSA Provenance:** *.intoto.jsonl (provenance attestations)
+          - **Build Metadata:** build-metadata.json
+          - **Artifact Hashes:** *.sha256
+
+          #### ✍️ Code Signing
           - All artifacts are signed with GPG
           - Signature files: *.asc
-          
-          ## 📦 Release Artifacts
-          
+
+          ### 📦 Release Artifacts
+
           **Main Artifacts:**
-          - JAR: ghrelasset-wagon-*.jar
-          - Sources: ghrelasset-wagon-*-sources.jar
-          - Javadoc: ghrelasset-wagon-*-javadoc.jar
-          - POM: ghrelasset-wagon-*.pom
-          
+          - JAR: ghrelasset-wagon-${{ needs.build-and-attest.outputs.version }}.jar
+          - Sources: ghrelasset-wagon-${{ needs.build-and-attest.outputs.version }}-sources.jar
+          - Javadoc: ghrelasset-wagon-${{ needs.build-and-attest.outputs.version }}-javadoc.jar
+          - POM: ghrelasset-wagon-${{ needs.build-and-attest.outputs.version }}.pom
+
           **Attestation Artifacts:**
           - sbom.spdx.json - SPDX Software Bill of Materials
           - sbom.cyclonedx.json - CycloneDX Software Bill of Materials
@@ -841,18 +789,16 @@ jobs:
           - build-metadata.json - Build environment metadata
           - *.sha256 - SHA-256 checksums
           - *.asc - GPG signatures
-          
-          ## 🔍 Verification
-          
+
+          ### 🔍 Verification
           See the attached VERIFICATION.md file for detailed instructions on verifying GPG signatures, SHA256 hashes, SLSA provenance, and scanning SBOMs for vulnerabilities.
-          
-          ## 🏗️ Build Environment
-          
+
+          ### 🏗️ Build Environment
           - **Runner OS:** ubuntu-latest
           - **Build Actor:** ${{ github.actor }}
           - **Repository:** ${{ github.repository }}
           - **Event:** ${{ github.event_name }}
-          
+
           All attestations are also available in Maven Central alongside the published artifacts.
-          
+
           For detailed information about security attestations, see [Security Attestations Documentation](docs/SECURITY_ATTESTATIONS.md).

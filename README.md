@@ -160,14 +160,14 @@ GhRelAssetWagon
 - **Complex Artifact Support**: Support for artifacts with classifiers and complex extensions (e.g., `.tar.gz`)
 
 ### Quality Assurance
-- **Comprehensive Testing**: Extensive unit tests covering core and advanced components with a 100% pass rate
+- **Comprehensive Testing**: Extensive unit test coverage across core and advanced components
 - **Test-Driven Development**: Features implemented using TDD methodology
 - **Continuous Integration**: Automated testing, security scanning, and coverage reporting
 - **Maven Central Ready**: Full GPG signing and deployment pipeline for Maven Central distribution
 - **Security Scanning**: Integrated Trivy vulnerability scanning and SBOM generation
 
 ### Security Attestations & Provenance
-- **SLSA Level 3 Provenance**: Cryptographically signed build provenance with GitHub attestations
+- **Provenance Attestations**: Cryptographically signed build provenance published via GitHub Attestations and SLSA tooling (effective SLSA level depends on CI configuration)
 - **Software Bill of Materials**: SPDX and CycloneDX format SBOMs published to Maven Central
 - **Vulnerability Scanning**: Comprehensive security reports in SARIF and JSON formats
 - **Code Signing**: GPG-signed artifacts with SHA-256 checksums for integrity verification
