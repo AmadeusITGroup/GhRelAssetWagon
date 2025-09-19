@@ -6,11 +6,13 @@ The GhRelAssetWagon project is designed to integrate GitHub Release Assets as a 
 
 # High level design
 
-```
-+------------------+      +---------------------+      +-----------------------+
-| Maven Project    | ---> | GhRelAssetWagon     | ---> | GitHub Release Assets |
-| (pom.xml)        |      | (Maven Wagon API)   |      | (as Maven Repository) |
-+------------------+      +---------------------+      +-----------------------+
+```mermaid
+flowchart LR
+    A["Maven Project 
+    (pom.xml)" ] --> B["GhRelAssetWagon
+    (Maven Wagon API)"]
+    B --> C["GitHub Release Assets
+    (as Maven Repository)"]
 ```
 
 The diagram above illustrates the integration of [`GhRelAssetWagon`]("src/main/java/io/github/amadeusitgroup/maven/wagon/GhRelAssetWagon.java") within the Maven ecosystem. It acts as a bridge between a Maven project and GitHub Release Assets, treating the latter as a Maven repository. This setup enables Maven to resolve and download dependencies stored as assets in GitHub releases.
@@ -122,19 +124,19 @@ GhRelAssetWagon
 - **Metadata Generation**: Creates proper Maven metadata files
 - **Path Validation**: Ensures proper Maven repository structure
 
-### Phase 2: Maven Repository Standards Compliance
+### Repository Standards Compliance
 - **Maven Metadata Handler**: Generates XML metadata for group, artifact, and version levels
 - **Repository Validator**: Validates Maven repository paths and extracts coordinates
 - **Enhanced Checksum Support**: Multiple checksum algorithms with validation
 
-### Phase 3: Performance & Reliability Enhancements
+### Performance & Reliability Enhancements
 - **Connection Pooling**: Thread-safe connection pooling for GitHub API calls
 - **Rate Limit Handling**: Intelligent GitHub API rate limit detection and throttling
 - **Retry Logic**: Configurable retry with exponential backoff and jitter
 - **Circuit Breaker**: Three-state circuit breaker for fail-fast behavior
 - **Async Operations**: Thread pool-based asynchronous task execution
 
-### Phase 4: Advanced Features
+### Advanced Features
 - **Parallel Operations**: Concurrent file uploads and downloads with thread pool management
 - **Delta Sync**: Incremental synchronization with snapshot-based change detection
 - **Compression Support**: Multi-format compression (GZIP, ZIP, TAR) with configurable levels
@@ -158,14 +160,14 @@ GhRelAssetWagon
 - **Complex Artifact Support**: Support for artifacts with classifiers and complex extensions (e.g., `.tar.gz`)
 
 ### Quality Assurance
-- **Comprehensive Testing**: 183 unit tests covering all Phase 4 components with 100% pass rate
-- **Test-Driven Development**: All Phase 4 features implemented using TDD methodology
+- **Comprehensive Testing**: Extensive unit test coverage across core and advanced components
+- **Test-Driven Development**: Features implemented using TDD methodology
 - **Continuous Integration**: Automated testing, security scanning, and coverage reporting
 - **Maven Central Ready**: Full GPG signing and deployment pipeline for Maven Central distribution
 - **Security Scanning**: Integrated Trivy vulnerability scanning and SBOM generation
 
 ### Security Attestations & Provenance
-- **SLSA Level 3 Provenance**: Cryptographically signed build provenance with GitHub attestations
+- **Provenance Attestations**: Cryptographically signed build provenance published via GitHub Attestations and SLSA tooling (effective SLSA level depends on CI configuration)
 - **Software Bill of Materials**: SPDX and CycloneDX format SBOMs published to Maven Central
 - **Vulnerability Scanning**: Comprehensive security reports in SARIF and JSON formats
 - **Code Signing**: GPG-signed artifacts with SHA-256 checksums for integrity verification
@@ -301,7 +303,7 @@ mvn clean install
 
 ## Advanced Configuration
 
-### Phase 4 Configuration Options
+### Configuration Options
 
 The GhRelAssetWagon supports external configuration through the `ConfigurationManager`. Create a configuration file (e.g., `ghrelasset-config.json`) with the following options:
 
@@ -339,10 +341,11 @@ The GhRelAssetWagon supports external configuration through the `ConfigurationMa
 
 ## Testing
 
+### Component Tests 
 The GhRelAssetWagon project includes comprehensive unit tests covering all components:
 
 - **Core Tests**: `GhRelAssetWagonTest.java` - Main wagon functionality
-- **Phase 4 Tests**: 
+- **Component Tests**: 
   - `ParallelOperationManagerTest.java` - Parallel operations
   - `DeltaSyncManagerTest.java` - Delta synchronization
   - `CompressionHandlerTest.java` - Compression features
