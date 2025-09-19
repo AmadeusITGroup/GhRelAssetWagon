@@ -21,7 +21,7 @@ The wagon implements the essential StreamWagon methods for efficient streaming o
 - `put(File, String)` - Stages artifacts for upload to GitHub releases
 - `openConnectionInternal()` - Establishes authentication and downloads repository cache
 
-### Enhanced Wagon Interface Methods (Phase 1)
+### Enhanced Wagon Interface Methods
 - `getFileList(String)` - Lists all files in a GitHub release directory
 - `resourceExists(String)` - Checks if a specific resource exists in the release
 - `putDirectory(File, String)` - Uploads entire directories as individual release assets
@@ -31,7 +31,7 @@ The wagon implements the essential StreamWagon methods for efficient streaming o
 ## Project Information
 
 - **Organization**: Amadeus IT Group
-- **License**: Apache License 2.0
+- **License**: MIT License
 - **Java Version**: 1.8+
 - **Maven Version**: 3.x
 - **Current Version**: 0.0.1
@@ -79,19 +79,19 @@ graph TB
 - **Temporary File Management**: Efficient handling of upload staging with automatic cleanup
 - **Maven Compliance**: Full compatibility with Maven's preferred streaming architecture
 
-### 2. Phase 2: Maven Repository Standards Compliance
+### 2. Repository Standards Compliance
 - **MavenMetadataHandler**: Generates Maven metadata XML files for group, artifact, and version levels
 - **ChecksumHandler**: Handles MD5, SHA-1, and SHA-256 checksum generation and validation
 - **RepositoryValidator**: Validates Maven repository paths and extracts coordinates
 
-### 3. Phase 3: Performance & Reliability Enhancements
+### 3. Performance & Reliability Enhancements
 - **ConnectionPoolManager**: Thread-safe connection pooling for GitHub API calls
 - **RateLimitHandler**: GitHub API rate limit detection and intelligent throttling
 - **RetryHandler**: Configurable retry logic with exponential backoff and jitter
 - **CircuitBreakerHandler**: Three-state circuit breaker for fail-fast behavior
 - **AsyncOperationManager**: Thread pool-based async task execution
 
-### 4. Phase 4: Advanced Features
+### 4. Advanced Features
 - **ParallelOperationManager**: Concurrent file operations with thread pool management
 - **DeltaSyncManager**: Incremental synchronization with snapshot-based change detection
 - **CompressionHandler**: File compression/decompression with multiple algorithms
@@ -290,7 +290,7 @@ export GH_RELEASE_ASSET_TOKEN="/path/to/token/file"
     <extension>
       <groupId>io.github.amadeusitgroup.maven.wagon</groupId>
       <artifactId>ghrelasset-wagon</artifactId>
-      <version>1.0.0</version>
+      <version>0.0.1</version>
     </extension>
   </extensions>
 </build>
@@ -310,7 +310,7 @@ export GH_RELEASE_ASSET_TOKEN="/path/to/token/file"
     <extension>
       <groupId>io.github.amadeusitgroup.maven.wagon</groupId>
       <artifactId>ghrelasset-wagon</artifactId>
-      <version>1.0.0</version>
+      <version>0.0.1</version>
     </extension>
   </extensions>
 </build>
@@ -367,7 +367,7 @@ export GH_RELEASE_ASSET_TOKEN="/path/to/token/file"
 
 ### Test Structure
 ```
-src/test/java/com/amadeus/maven/wagon/GhRelAssetWagonTest.java
+src/test/java/io/github/amadeusitgroup/maven/wagon/GhRelAssetWagonTest.java
 ```
 
 ### CI/CD
@@ -405,7 +405,7 @@ The wagon includes extensive logging for troubleshooting:
 
 ## Future Enhancements
 
-### Phase 4 Features (Implemented)
+### Advanced Features (Implemented)
 - ✅ **Parallel Operations**: Concurrent uploads and downloads with thread pool management
 - ✅ **Delta Sync**: Incremental synchronization with snapshot-based change detection
 - ✅ **Compression Support**: Multi-format compression (GZIP, ZIP, TAR) with configurable levels
