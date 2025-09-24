@@ -264,7 +264,7 @@ public class GhRelAssetWagon extends StreamWagon {
      */
     private int executeEnhancedRequest(HttpURLConnection connection) throws IOException {
         try {
-            connection.connect();
+            // connection.connect() called implicitly if not already
             int responseCode = connection.getResponseCode();
             
             // Update rate limit information from response headers
@@ -431,6 +431,8 @@ public class GhRelAssetWagon extends StreamWagon {
                         return idNode.asText();
                     }
                 }
+            } else if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
+                return null;
             } else if (responseCode == HttpURLConnection.HTTP_MOVED_PERM
                     || responseCode == HttpURLConnection.HTTP_MOVED_TEMP
                     || responseCode == HttpURLConnection.HTTP_SEE_OTHER || responseCode == 307 || responseCode == 308) {
@@ -511,63 +513,66 @@ public class GhRelAssetWagon extends StreamWagon {
      * @throws IOException If an error occurs while checking or creating the tag.
      */
     String getOrCreateTag(String repository, String tag, String commit) throws IOException {
-
-        // check the tag - if missing, create it
-        URL url = new URL(apiEndpoint + "/repos/" + repository + "/tags/" + commit);
-        HttpURLConnection connection;
         try {
-            connection = createEnhancedConnection(url, "GET");
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Interrupted while creating connection", e);
-        }
-        int responseCode = executeEnhancedRequest(connection);
-        connection.disconnect();
-        connection = null;
-        System.out.println("GhRelAssetWagon:checkOrCreateTag Response code: " + responseCode);
-
-        if (responseCode == HttpURLConnection.HTTP_OK) {
-            System.out.println("GhRelAssetWagon: Tag exists");
-            // return the tag
-            return tag;
-        } else if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
-            System.out.println("GhRelAssetWagon: Tag does not exist");
-
-            // create the tag
-            url = new URL(apiEndpoint + "/repos/" + repository + "/git/tags");
+            // check the tag - if missing, create it
+            URL url = new URL(apiEndpoint + "/repos/" + repository + "/tags/" + commit);
+            HttpURLConnection connection;
             try {
-                connection = createEnhancedConnection(url, "POST");
+                connection = createEnhancedConnection(url, "GET");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IOException("Interrupted while creating connection", e);
             }
+            int responseCode = executeEnhancedRequest(connection);
+            connection.disconnect();
+            connection = null;
+            System.out.println("GhRelAssetWagon:checkOrCreateTag Response code: " + responseCode);
 
-            // set the request body
-            String requestBody = "{\"tag\":\"" + tag
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                System.out.println("GhRelAssetWagon: Tag exists");
+                // return the tag
+                return tag;
+            } else if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
+                System.out.println("GhRelAssetWagon: Tag does not exist");
+
+                // create the tag
+                url = new URL(apiEndpoint + "/repos/" + repository + "/git/tags");
+                try {
+                    connection = createEnhancedConnection(url, "POST");
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted while creating connection", e);
+                }
+
+                // set the request body
+                String requestBody = "{\"tag\":\"" + tag
                     + "\",\"message\":\"Tag created by GhRhelAssetWagon\",\"object\":\"" + commit
                     + "\",\"type\":\"commit\",\"email\":\"GhRhelAssetWagon@noreply.com\""
                     + "\"}}";
-            System.out.println("GhRelAssetWagon:checkOrCreateTag Request body: " + requestBody);
+                System.out.println("GhRelAssetWagon:checkOrCreateTag Request body: " + requestBody);
 
-            connection.setDoOutput(true);
-            connection.getOutputStream().write(requestBody.getBytes());
+                connection.setDoOutput(true);
+                connection.getOutputStream().write(requestBody.getBytes());
 
-            responseCode = executeEnhancedRequest(connection);
-            System.out.println("GhRelAssetWagon:checkOrCreateTag Response code: " + responseCode);
-            System.out.println(
+                responseCode = executeEnhancedRequest(connection);
+                System.out.println("GhRelAssetWagon:checkOrCreateTag Response code: " + responseCode);
+                System.out.println(
                     "GhRelAssetWagon:checkOrCreateTag Response message: " + connection.getResponseMessage());
 
-            if (responseCode == HttpURLConnection.HTTP_CREATED) {
-                System.out.println("GhRelAssetWagon: Tag created");
+                if (responseCode == HttpURLConnection.HTTP_CREATED) {
+                    System.out.println("GhRelAssetWagon: Tag created");
+                } else {
+                    throw new IOException("Failed to create tag");
+                }
+
             } else {
-                throw new IOException("Failed to create tag");
+                throw new IOException("Failed to check tag");
             }
 
-        } else {
-            throw new IOException("Failed to check tag");
+            return tag;
+        } catch (IOException e) {
+            throw new IOException("Failed to create tag");
         }
-
-        return tag;
     }
 
     /**
@@ -705,126 +710,88 @@ public class GhRelAssetWagon extends StreamWagon {
      * @return The SHA1 hash of the uploaded asset.
      * @throws Exception If an error occurs during the upload process.
      */
-    String uploadGHReleaseAsset(String repository, String tag, String assetName) throws Exception {
-        // get release from github using the repository and tag
-        System.out.println("GhRelAssetWagon: Uploading asset " + assetName + " to " + repository + " tag " + tag);
-
-        // 1. Let's assume the tag is created on the latest commit of the default branch
-        // - let's get the repository metadata to read it
-        String defaultBranch = getDefaultBranch(repository);
-
-        // 2. Now we need to get this branch and grab the sha of the latest commit
-        String latestCommit = getLatestCommit(repository, defaultBranch);
-
-        // 3. Now we need to check or create the tag
+    String uploadZipToReleaseAsset(String githubRepository, String tag, String assetName) throws IOException {
         try {
-            getOrCreateTag(repository, tag, latestCommit);
-        } catch (IOException e) {
-            // print out the stack trace
-            e.printStackTrace();
-            throw new IOException("Failed to create tag");
+            // get release from GitHub using the repository and tag
+            System.out.println("GhRelAssetWagon: Uploading asset " + assetName + " to " + repository + " tag " + tag);
+
+            // 1. Let's assume the tag is created on the latest commit of the default branch
+            // - let's get the repository metadata to read it
+            String defaultBranch = getDefaultBranch(githubRepository);
+
+            // 2. Now we need to get this branch and grab the sha of the latest commit
+            String latestCommit = getLatestCommit(githubRepository, defaultBranch);
+
+            // 3. Now we need to check or create the tag
+            getOrCreateTag(githubRepository, tag, latestCommit);
+
+            String releaseId = getOrCreateRelease(githubRepository, tag);
+            System.out.println("GhRelAssetWagon: Release ID: " + releaseId);
+
+            String sha1 = getSHA1(this.getRepository().getUrl());
+            File zipRepo = new File(System.getProperty("user.home") + "/.ghrelasset/repos/" + sha1);
+            System.out.println("GhRelAssetWagon: uploadGHReleaseAsset - repo: " + zipRepo);
+
+            // Create the asset
+
+            String assetId = getAssetId(githubRepository, tag, assetName);
+
+            if (assetId != null) {
+                deleteAsset(githubRepository, assetId);
+            }
+
+            int responseCode = uploadAsset(githubRepository, releaseId, assetName, zipRepo);
+
+            if (responseCode == HttpURLConnection.HTTP_CREATED) {
+                System.out.println("GhRelAssetWagon: Asset uploaded");
+            } else {
+                throw new IOException("Failed to upload asset. Response code: " + responseCode);
+            }
+            return sha1;
+        } catch (IOException | NoSuchAlgorithmException e) {
+            throw new IOException("Failed to upload release asset", e);
         }
+    }
 
-        String releaseId = getOrCreateRelease(repository, tag);
-        System.out.println("GhRelAssetWagon: Release ID: " + releaseId);
-
-        String sha1 = getSHA1(this.getRepository().getUrl().toString());
-        File zipRepo = new File(System.getProperty("user.home") + "/.ghrelasset/repos/" + sha1);
-        System.out.println("GhRelAssetWagon: uploadGHReleaseAsset - repo: " + zipRepo);
-
-        URL url = new URL(uploadEndpoint + "/repos/" + repository + "/releases/" + releaseId
-                + "/assets?name=" + assetName);
-
-        HttpURLConnection connection;
+    public void deleteAsset(String githubRepository, String assetId) throws IOException {
+        URL deleteUrl = new URL(apiEndpoint + "/repos/" + githubRepository + "/releases/assets/" + assetId);
         try {
-            connection = createEnhancedConnection(url, "POST");
+            HttpURLConnection connection = createEnhancedConnection(deleteUrl, "DELETE");
+            int responseCode = executeEnhancedRequest(connection);
+
+            System.out.println("GhRelAssetWagon: Response code: " + responseCode);
+
+            if (responseCode == HttpURLConnection.HTTP_NO_CONTENT) {
+                System.out.println("GhRelAssetWagon: Asset deleted");
+            } else {
+                throw new IOException("Failed to delete existing asset");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException("Interrupted while creating connection", e);
         }
+    }
 
-        // Create the asset
+    public int uploadAsset(String repository, String releaseId, String assetName, File file) throws IOException {
+        URL url = new URL(uploadEndpoint + "/repos/" + repository + "/releases/" + releaseId
+            + "/assets?name=" + assetName);
         try {
-            String assetId = getAssetId(repository, tag, assetName);
-
+            HttpURLConnection connection = createEnhancedConnection(url, "POST");
             connection.setRequestProperty("Content-Type", "application/octet-stream");
             connection.setDoOutput(true);
-
-            // set the request body - as a binary file from the zipRepo
-            connection.getOutputStream().write(org.apache.commons.io.FileUtils.readFileToByteArray(zipRepo));
-            int responseCode = executeEnhancedRequest(connection);
-            connection.disconnect();
-            connection = null;
-
-            // if the asset already exists, then we need to delete it first
-            if (responseCode == 422) {
-                // delete the asset
-                URL deleteUrl = new URL(apiEndpoint + "/repos/" + repository + "/releases/assets/" + assetId);
-                try {
-                    connection = createEnhancedConnection(deleteUrl, "DELETE");
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("Interrupted while creating connection", e);
+            connection.setFixedLengthStreamingMode(file.length());
+            
+            try (InputStream fileStream = new FileInputStream(file)) {
+                try (OutputStream outStream = connection.getOutputStream()) {
+                    fileStream.transferTo(outStream);
                 }
-                responseCode = executeEnhancedRequest(connection);
-                connection.disconnect();
-                connection = null;
-                if (responseCode == HttpURLConnection.HTTP_NO_CONTENT) {
-                    System.out.println("GhRelAssetWagon: Asset deleted");
-                } else {
-                    throw new IOException("Failed to delete asset");
-                }
-
-                try {
-                    connection = createEnhancedConnection(url, "POST");
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("Interrupted while creating connection", e);
-                }
-                connection.setRequestProperty("Content-Type", "application/octet-stream");
-                connection.setDoOutput(true);
-
-                // set the request body - as a binary file from the zipRepo
-                connection.getOutputStream().write(org.apache.commons.io.FileUtils.readFileToByteArray(zipRepo));
-                responseCode = executeEnhancedRequest(connection);
-                connection.disconnect();
-                connection = null;
-                if (responseCode == HttpURLConnection.HTTP_CREATED) {
-                    System.out.println("GhRelAssetWagon: Asset uploaded");
-                    return sha1;
-                } else {
-                    throw new IOException("Failed to upload asset");
-                }
-
-            } else if (responseCode == HttpURLConnection.HTTP_CREATED) {
-                System.out.println("GhRelAssetWagon: Asset uploaded");
-            } else {
-                throw new IOException("Failed to upload asset");
             }
 
-        } catch (IOException e) {
-            try {
-                connection = createEnhancedConnection(url, "POST");
-            } catch (InterruptedException ex) {
-                Thread.currentThread().interrupt();
-                throw new IOException("Interrupted while creating connection", ex);
-            }
-            connection.setRequestProperty("Content-Type", "application/octet-stream");
-            connection.setDoOutput(true);
-
-            // set the request body - as a binary file from the zipRepo
-            connection.getOutputStream().write(org.apache.commons.io.FileUtils.readFileToByteArray(zipRepo));
-            Integer responseCode = executeEnhancedRequest(connection);
-            connection.disconnect();
-            connection = null;
-            if (responseCode == HttpURLConnection.HTTP_CREATED) {
-                System.out.println("GhRelAssetWagon: Asset uploaded");
-                return sha1;
-            } else {
-                throw new IOException("Failed to upload asset");
-            }
+            return executeEnhancedRequest(connection);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while creating connection", e);
         }
-        return sha1;
     }
 
     /**
@@ -1360,6 +1327,8 @@ public class GhRelAssetWagon extends StreamWagon {
                 e.printStackTrace();
             }
         }
+
+        System.out.println(this.rateLimitHandler.getStatus());
     }
 
     /**
@@ -1395,7 +1364,7 @@ public class GhRelAssetWagon extends StreamWagon {
                     System.out.println("GhRelAssetWagon: Uploading the zip file");
                     String[] parts = this.getRepository().getUrl().split("/");
                     try {
-                        String uploadedAssetSha1 = uploadGHReleaseAsset(parts[2] + "/" + parts[3], parts[4], parts[5]);
+                        String uploadedAssetSha1 = uploadZipToReleaseAsset(parts[2] + "/" + parts[3], parts[4], parts[5]);
                         System.out.println("GhRelAssetWagon[closeConnection]: Uploaded asset SHA1: " + uploadedAssetSha1);
                     } catch (Exception e) {
                         e.printStackTrace();
@@ -2327,53 +2296,6 @@ public class GhRelAssetWagon extends StreamWagon {
     }
 
     /**
-     * Uploads an asset to a GitHub release.
-     *
-     * @param owner The repository owner
-     * @param repo The repository name
-     * @param releaseId The release ID
-     * @param assetName The name for the asset
-     * @param filePath The path to the file to upload
-     * @throws IOException If upload fails
-     * @throws InterruptedException If the operation is interrupted
-     */
-    private void uploadAsset(String owner, String repo, String releaseId, String assetName, String filePath) 
-            throws IOException, InterruptedException {
-        
-        File file = new File(filePath);
-        if (!file.exists()) {
-            throw new IOException("File not found: " + filePath);
-        }
-        
-        String uploadUrl = "https://uploads.github.com/repos/" + owner + "/" + repo + "/releases/" + releaseId + "/assets?name=" + assetName;
-        HttpURLConnection connection = createEnhancedConnection(new URL(uploadUrl), "POST");
-        
-        try {
-            connection.setDoOutput(true);
-            connection.setRequestProperty("Content-Type", "application/octet-stream");
-            connection.setRequestProperty("Content-Length", String.valueOf(file.length()));
-            
-            // Upload file content
-            try (FileInputStream fis = new FileInputStream(file);
-                 OutputStream os = connection.getOutputStream()) {
-                
-                byte[] buffer = new byte[8192];
-                int bytesRead;
-                while ((bytesRead = fis.read(buffer)) != -1) {
-                    os.write(buffer, 0, bytesRead);
-                }
-            }
-            
-            if (connection.getResponseCode() != HttpURLConnection.HTTP_CREATED) {
-                throw new IOException("Failed to upload asset: HTTP " + connection.getResponseCode());
-            }
-            
-        } finally {
-            connection.disconnect();
-        }
-    }
-
-    /**
      * Processes all queued uploads from StreamWagon operations.
      *
      * @throws IOException If upload processing fails
@@ -2463,7 +2385,7 @@ public class GhRelAssetWagon extends StreamWagon {
      * @throws IOException If the upload fails
      * @throws InterruptedException If the operation is interrupted
      */
-    private void uploadFileToGitHub(File file, String resourceName) throws IOException, InterruptedException {
+    private void uploadFileToGitHub(File file, String resourceName) throws IOException {
         // Parse repository information
         String repoUrl = getRepository().getUrl();
         String[] parts = parseRepositoryUrl(repoUrl);
@@ -2475,7 +2397,7 @@ public class GhRelAssetWagon extends StreamWagon {
         String releaseId = getOrCreateRelease(owner + "/" + repo, tag);
         
         // Upload the asset
-        uploadAsset(owner, repo, releaseId, resourceName, file.getAbsolutePath());
+        uploadAsset(owner + "/" + repo, releaseId, resourceName, file);
     }
 
     /**
