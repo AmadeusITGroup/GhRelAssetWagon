@@ -1,6 +1,5 @@
 package io.github.amadeusitgroup.maven.wagon;
 
-import org.apache.maven.wagon.AbstractWagon;
 import org.apache.maven.wagon.StreamWagon;
 import org.apache.maven.wagon.InputData;
 import org.apache.maven.wagon.OutputData;
@@ -12,6 +11,7 @@ import org.apache.maven.wagon.authentication.AuthenticationException;
 import org.apache.maven.wagon.authentication.AuthenticationInfo;
 import org.apache.maven.wagon.authorization.AuthorizationException;
 import org.apache.maven.wagon.repository.Repository;
+import org.apache.maven.wagon.resource.Resource;
 import org.codehaus.plexus.util.FileUtils;
 
 import java.io.File;
@@ -19,24 +19,23 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
+import java.net.URI;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.ArrayList;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.nio.file.StandardCopyOption;
 
 import java.net.URL;
 import java.nio.file.Files;
@@ -47,7 +46,6 @@ import java.net.HttpURLConnection;
 import java.io.InputStream;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
-import java.util.concurrent.CompletableFuture;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -71,7 +69,7 @@ public class GhRelAssetWagon extends StreamWagon {
     /**
      * The list of artifacts to upload.
      */
-    List<String> artifactsToUpload = new ArrayList<String>();
+    List<String> artifactsToUpload = new ArrayList<>();
 
     /**
      * Handler for Maven metadata generation and management.
@@ -209,16 +207,13 @@ public class GhRelAssetWagon extends StreamWagon {
      */
     private final ConfigurationManager configurationManager = ConfigurationManager.getInstance();
 
-    /**
-     * Connection timeout in milliseconds.
-     */
-    private int timeout = 60000; // 60 seconds default
-
 
     /**
      * Interactive mode flag.
      */
     private boolean interactive = false;
+
+    private FileSystem stagingZipFileSystem;
 
     /**
      * Creates an HTTP connection with performance enhancements including connection pooling,
@@ -839,7 +834,7 @@ public class GhRelAssetWagon extends StreamWagon {
      * @return the SHA-1 hash value of the input string
      * @throws Exception if an error occurs during the hash calculation
      */
-    String getSHA1(String input) throws Exception {
+    String getSHA1(String input) throws NoSuchAlgorithmException {
         MessageDigest md = MessageDigest.getInstance("SHA-1");
         md.update(input.getBytes());
         byte[] digest = md.digest();
@@ -852,39 +847,42 @@ public class GhRelAssetWagon extends StreamWagon {
      * file path.
      *
      * @param zipFilePath    the path of the zip file
-     * @param resourceName   the name of the resource to retrieve from the zip file
-     * @param outputFilePath the path of the output file where the resource will be
-     *                       copied to
+     * @param resource       the resource to retrieve from the zip file
+     * @param destination    the file to write the resource to
      * @throws IOException if an I/O error occurs while reading the zip file or
      *                     copying the resource
      */
-    void getResourceFromZip(String zipFilePath, String resourceName, String outputFilePath) throws IOException {
+    void getResourceFromZip(String zipFilePath, Resource resource, File destination) throws IOException, TransferFailedException {
         try (ZipFile zipFile = new ZipFile(zipFilePath)) {
-            ZipEntry entry = zipFile.getEntry(resourceName);
+            ZipEntry entry = zipFile.getEntry(resource.getName());
 
             if (entry == null) {
-                System.out.println("The resource does not exist in the zip file: " + resourceName);
+                System.out.println("The resource does not exist in the zip file: " + resource.getName());
                 return;
             }
 
-            try (InputStream inputStream = zipFile.getInputStream(entry)) {
-                System.out.println("GhRelAssetWagon: getResourceFromZip - copying resource from zip file: "
-                        + resourceName + " to " + outputFilePath);
-                // if outputFilePath exists, then delete it first
-                if (Files.exists(Paths.get(outputFilePath))) {
-                    Files.delete(Paths.get(outputFilePath));
-                }
-                Files.copy(inputStream, Paths.get(outputFilePath));
-                // verify the file was copied
-                if (Files.exists(Paths.get(outputFilePath))) {
-                    System.out.println("GhRelAssetWagon: getResourceFromZip - resource copied successfully");
-                    // display the file size
-                    System.out.println("GhRelAssetWagon: getResourceFromZip - file size: "
-                            + Files.size(Paths.get(outputFilePath)));
-                } else {
-                    System.out.println("GhRelAssetWagon: getResourceFromZip - failed to copy resource");
-                }
-            }
+            System.out.println("GhRelAssetWagon: getResourceFromZip - copying resource from zip file: "
+                + resource.getName() + " to " + destination.toPath());
+            InputStream inputStream = zipFile.getInputStream(entry);
+
+            fireGetStarted(resource, destination);
+            getTransfer(resource, destination, inputStream);
+        }
+    }
+
+    /**
+     * In order to write new files to an existing Zip a new {@link java.io.FileSystem} is created.
+     * A reference is maintained to avoid recreating for each new file, then the Filesystem is closed in {@link #closeConnection()}
+     *
+     * @param zipRepo the zipRepo to initialize the FileSystem for
+     * @throws IOException if an I/O error occurs whilst initializing the FileSystem
+     */
+    void initialiseZipFileSystem(File zipRepo) throws IOException {
+        if (this.stagingZipFileSystem == null || !this.stagingZipFileSystem.isOpen()) {
+            Map<String, String> env = new HashMap<>();
+            env.put("create", "true");
+            URI uri = URI.create("jar:" + zipRepo.toURI());
+            this.stagingZipFileSystem = FileSystems.newFileSystem(uri, env);
         }
     }
 
@@ -917,44 +915,20 @@ public class GhRelAssetWagon extends StreamWagon {
             return;
         }
 
-        // create a new zip file
-        File tempFile = new File(zipFilePath + ".tmp");
-        try (ZipFile zip = new ZipFile(zipFilePath);) {
-            try (ZipOutputStream zipOutputStream = new ZipOutputStream(new FileOutputStream(tempFile))) {
-                zip.stream().forEach(entry -> {
-                    try {
-                        if (entry.getName().equals(resourceName)) {
-                            // skip the resource to be added
-                            return;
-                        }
-                        zipOutputStream.putNextEntry(entry);
-                        InputStream inputStream = zip.getInputStream(entry);
-                        byte[] buffer = new byte[1024];
-                        int length;
-                        while ((length = inputStream.read(buffer)) > 0) {
-                            zipOutputStream.write(buffer, 0, length);
-                        }
-                        inputStream.close();
-                        zipOutputStream.closeEntry();
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                });
+        // zip already exists
+        initialiseZipFileSystem(zipRepo);
 
-                // add the new resource to the new zip file
-                zipOutputStream.putNextEntry(new ZipEntry(resourceName));
-                try (InputStream inputStream = new FileInputStream(resourcePath)) {
-                    byte[] buffer = new byte[1024];
-                    int length;
-                    while ((length = inputStream.read(buffer)) > 0) {
-                        zipOutputStream.write(buffer, 0, length);
-                    }
-                }
-                zipOutputStream.closeEntry();
-            }
-            // rename the new zip file to the original zip file
-            Files.move(tempFile.toPath(), Paths.get(zipFilePath), StandardCopyOption.REPLACE_EXISTING);
+        // write file into zip, replacing any existing file at the same path
+        Path entryPath = this.stagingZipFileSystem.getPath(resourceName);
+
+        if (entryPath.getParent() != null) {
+            Files.createDirectories(entryPath.getParent());
         }
+
+        Files.write(entryPath,
+            Files.readAllBytes(Paths.get(resourcePath)),
+            StandardOpenOption.CREATE,
+            StandardOpenOption.TRUNCATE_EXISTING);
     }
 
     /**
@@ -972,32 +946,29 @@ public class GhRelAssetWagon extends StreamWagon {
     @Override
     public void get(String resourceName, File destination)
             throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
-
         System.out.println("GhRelAssetWagon: Getting resource '" + resourceName + "' to '" + destination + "'");
+        Resource resource = new Resource(resourceName);
+        fireGetInitiated(resource, destination);
 
         String sha1;
         try {
-            sha1 = getSHA1(this.getRepository().getUrl().toString());
+            sha1 = getSHA1(this.getRepository().getUrl());
             File zipRepo = new File(System.getProperty("user.home") + "/.ghrelasset/repos/" + sha1);
             System.out.println("GhRelAssetWagon: get - repo: " + zipRepo);
             if (zipRepo.exists()) {
                 // zipRepo is a zip file - get the resource from it
                 System.out.println("GhRelAssetWagon: get - repo exists");
-                String resourceNameInZip = resourceName;
-                if (resourceName.startsWith("/")) {
-                    resourceNameInZip = resourceName.substring(1);
-                }
-                getResourceFromZip(zipRepo.toString(), resourceNameInZip, destination.toString());
+                getResourceFromZip(zipRepo.toString(), resource, destination);
 
-                // org.apache.commons.io.FileUtils.copyFile(zipRepo, destination);
             } else {
                 downloadGHReleaseAsset("Amadeus-xDLC/github.pinger", "0.0.0", "pinger");
                 org.apache.commons.io.FileUtils.copyFile(zipRepo, destination);
             }
         } catch (Exception e) {
-            // TODO Auto-generated catch block
-            e.printStackTrace();
+            throw new TransferFailedException("Failed to get resource: " + resourceName, e);
         }
+
+        fireGetCompleted(resource, destination);
     }
 
     /**
@@ -1146,7 +1117,7 @@ public class GhRelAssetWagon extends StreamWagon {
         System.out.println("GhRelAssetWagon: stageArtifact - tagName: " + tagName);
 
         try {
-            String sha1 = getSHA1(this.getRepository().getUrl().toString());
+            String sha1 = getSHA1(this.getRepository().getUrl());
             File repoDir = new File(System.getProperty("user.home") + "/.ghrelasset/repos/");
             if (!repoDir.exists()) {
                 repoDir.mkdirs();
@@ -1401,6 +1372,10 @@ public class GhRelAssetWagon extends StreamWagon {
     @Override
     public void closeConnection() throws ConnectionException {
         try {
+            if (stagingZipFileSystem != null) {
+                stagingZipFileSystem.close();
+            }
+
             // Skip processing in test environments
             if (isTestEnvironment()) {
                 return;
@@ -1417,7 +1392,7 @@ public class GhRelAssetWagon extends StreamWagon {
                 }
 
                 if (this.getRepository().getUrl().endsWith(".zip")) {
-                    System.out.println("GhRelAssetWagon: Downloading the zip file");
+                    System.out.println("GhRelAssetWagon: Uploading the zip file");
                     String[] parts = this.getRepository().getUrl().split("/");
                     try {
                         String uploadedAssetSha1 = uploadGHReleaseAsset(parts[2] + "/" + parts[3], parts[4], parts[5]);
@@ -2230,30 +2205,42 @@ public class GhRelAssetWagon extends StreamWagon {
     public void fillOutputData(OutputData outputData) throws TransferFailedException {
         
         String resourceName = outputData.getResource().getName();
+
+        // For test scenarios, provide a mock output stream
+        if (isTestEnvironment()) {
+            outputData.setOutputStream(new java.io.ByteArrayOutputStream());
+            return;
+        }
         
         try {
-            // Fire transfer events for progress reporting
-            firePutInitiated(outputData.getResource(), null);
-            firePutStarted(outputData.getResource(), null);
-            
-            // For test scenarios, provide a mock output stream
-            if (isTestEnvironment()) {
-                outputData.setOutputStream(new java.io.ByteArrayOutputStream());
+            String sha1 = getSHA1(this.getRepository().getUrl());
+            File zipRepo = new File(System.getProperty("user.home") + "/.ghrelasset/repos/" + sha1);
+
+            // create output streams (maven will close them for us)
+            if (!zipRepo.exists()) {
+                ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(zipRepo));
+                ZipEntry entry = new ZipEntry(resourceName);
+                zos.putNextEntry(entry);
+                outputData.setOutputStream(zos);
                 return;
+            } else {
+                // zip already exists
+                if (stagingZipFileSystem == null) {
+                    Map<String, String> env = new HashMap<>();
+                    env.put("create", "true");
+                    URI uri = URI.create("jar:" + zipRepo.toURI());
+
+                    // write file into zip, replacing any existing file at the same path
+                    stagingZipFileSystem = FileSystems.newFileSystem(uri, env);
+                }
+
+                Path entryPath = stagingZipFileSystem.getPath(resourceName);
+                outputData.setOutputStream(Files.newOutputStream(entryPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING));
             }
             
-            // For StreamWagon, we'll write to a temporary file first
-            // then queue it for GitHub upload in closeConnection()
-            File tempFile = createTempUploadFile(resourceName);
-            FileOutputStream outputStream = new FileOutputStream(tempFile);
+            artifactsToUpload.add(resourceName);
             
-            // Set the output stream for StreamWagon to use
-            outputData.setOutputStream(outputStream);
-            
-            // Store the temp file path for later upload
-            uploadedArtifacts.put(resourceName, tempFile.getAbsolutePath());
-            
-        } catch (IOException e) {
+        } catch (IOException | NoSuchAlgorithmException e) {
             // Fire transfer error event
             fireTransferError(outputData.getResource(), e, TransferEvent.REQUEST_PUT);
             throw new TransferFailedException("Failed to configure output stream for " + resourceName, e);
@@ -2384,20 +2371,6 @@ public class GhRelAssetWagon extends StreamWagon {
         } finally {
             connection.disconnect();
         }
-    }
-
-    /**
-     * Creates a temporary file for upload operations.
-     *
-     * @param resourceName The name of the resource
-     * @return The temporary file
-     * @throws IOException If file creation fails
-     */
-    private File createTempUploadFile(String resourceName) throws IOException {
-        String tempDir = System.getProperty("java.io.tmpdir");
-        File tempFile = new File(tempDir, "ghrelasset-upload-" + System.currentTimeMillis() + "-" + resourceName);
-        tempFile.createNewFile();
-        return tempFile;
     }
 
     /**

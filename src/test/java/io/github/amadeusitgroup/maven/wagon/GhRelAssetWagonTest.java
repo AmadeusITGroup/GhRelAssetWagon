@@ -1,5 +1,6 @@
 package io.github.amadeusitgroup.maven.wagon;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayName;
@@ -38,6 +39,11 @@ public class GhRelAssetWagonTest {
                 ghRelAssetWagon.setUploadEndpoint(wmRuntimeInfo.getHttpBaseUrl());
                 // set up a mock repository for testing
                 ghRelAssetWagon.setRepository("test-repo", "ghrelasset://owner/repo/v1.0.0/test-asset.zip");
+        }
+
+        @AfterEach
+        public void tearDown() throws Exception {
+                ghRelAssetWagon.closeConnection();
         }
 
         @Test
