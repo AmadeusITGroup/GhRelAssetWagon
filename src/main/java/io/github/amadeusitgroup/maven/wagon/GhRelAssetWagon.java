@@ -19,13 +19,8 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.net.URI;
-import java.nio.file.FileSystem;
-import java.nio.file.FileSystems;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
@@ -40,7 +35,6 @@ import java.util.zip.ZipOutputStream;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import javax.xml.bind.DatatypeConverter;
 
 import java.net.HttpURLConnection;
 import java.io.InputStream;
@@ -207,13 +201,14 @@ public class GhRelAssetWagon extends StreamWagon {
      */
     private final ConfigurationManager configurationManager = ConfigurationManager.getInstance();
 
+    private ZipCacheManager zipCacheManager = new ZipCacheManager();
 
     /**
      * Interactive mode flag.
      */
     private boolean interactive = false;
 
-    private FileSystem stagingZipFileSystem;
+    private GhRelAssetRepository  ghRelAssetRepository;
 
     /**
      * Creates an HTTP connection with performance enhancements including connection pooling,
@@ -341,6 +336,14 @@ public class GhRelAssetWagon extends StreamWagon {
     }
 
     /**
+     * Sets the ZipCacheManager.
+     * @param zipCacheManager The ZipCacheManager to set.
+     */
+    public void setZipCacheManager(ZipCacheManager zipCacheManager) {
+        this.zipCacheManager = zipCacheManager;
+    }
+
+    /**
      * Retrieves the release ID for a given repository and tag.
      *
      * @param repository the name of the repository
@@ -373,6 +376,9 @@ public class GhRelAssetWagon extends StreamWagon {
                 JsonNode idNode = rootNode.path("id");
 
                 return idNode.asText();
+            } else if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
+                System.out.println("GhRelAssetWagon: Release with tag " + tag + " not found");
+                return null;
             } else if (responseCode == HttpURLConnection.HTTP_MOVED_PERM
                     || responseCode == HttpURLConnection.HTTP_MOVED_TEMP
                     || responseCode == HttpURLConnection.HTTP_SEE_OTHER || responseCode == 307 || responseCode == 308) {
@@ -400,6 +406,10 @@ public class GhRelAssetWagon extends StreamWagon {
     String getAssetId(String repository, String tag, String assetName) throws IOException {
         // get release from github using the repository and tag
         String releaseId = getReleaseId(repository, tag);
+
+        if (releaseId == null) {
+            return null;
+        }
 
         URL url = new URL(apiEndpoint + "/repos/" + repository + "/releases/" + releaseId + "/assets");
 
@@ -451,19 +461,24 @@ public class GhRelAssetWagon extends StreamWagon {
     /**
      * Downloads a release asset from a GitHub repository.
      *
-     * @param repository The name of the GitHub repository.
-     * @param tag        The tag of the release.
-     * @param assetName  The name of the asset to download.
-     * @return The SHA1 hash of the downloaded asset.
+     * @return The InputStream containing the data of the downloaded asset.
      * @throws Exception If an error occurs during the download process.
      */
-    String downloadGHReleaseAsset(String repository, String tag, String assetName) throws Exception {
+    InputStream downloadGHReleaseAsset() throws Exception {
+        String ghRepo = ghRelAssetRepository.getGitHubRepository();
+        String tag = ghRelAssetRepository.getTag();
+        String assetName = ghRelAssetRepository.getAssetName();
+
         // get release from github using the repository and tag
-        System.out.println("GhRelAssetWagon: Downloading asset " + assetName + " from " + repository + " tag " + tag);
-        String assetId = getAssetId(repository, tag, assetName);
+        System.out.println("GhRelAssetWagon: Downloading asset " + assetName + " from " + ghRepo + " tag " + tag);
+        String assetId = getAssetId(ghRepo, tag, assetName);
+
+        if (assetId == null) {
+            return null;
+        }
         System.out.println("GhRelAssetWagon: Asset ID: " + assetId);
 
-        URL url = new URL(apiEndpoint + "/repos/" + repository + "/releases/assets/" + assetId);
+        URL url = new URL(apiEndpoint + "/repos/" + ghRepo + "/releases/assets/" + assetId);
         System.out.println("GhRelAssetWagon: Downloading asset from " + url);
 
         // Note: we cannot follow redirects automatically - we need to do it manually
@@ -481,12 +496,10 @@ public class GhRelAssetWagon extends StreamWagon {
             int responseCode = executeEnhancedRequest(connection);
             System.out.println("GhRelAssetWagon: DownloadGHReleaseAsset Response code: " + responseCode);
             if (responseCode == HttpURLConnection.HTTP_OK) {
-                InputStream inputStream = connection.getInputStream();
-                String sha1 = getSHA1(this.getRepository().getUrl().toString());
-                File destination = new File(System.getProperty("user.home") + "/.ghrelasset/repos/" + sha1);
-                System.out.println("GhRelAssetWagon: Downloading asset to " + destination);
-                org.apache.commons.io.FileUtils.copyInputStreamToFile(inputStream, destination);
-                return sha1;
+                return connection.getInputStream();
+            } else if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
+                System.out.println("GhRelAssetWagon: Asset ID " + assetId + " not found");
+                return null;
             } else if (responseCode == HttpURLConnection.HTTP_MOVED_PERM
                     || responseCode == HttpURLConnection.HTTP_MOVED_TEMP
                     || responseCode == HttpURLConnection.HTTP_SEE_OTHER || responseCode == 307 || responseCode == 308) {
@@ -704,16 +717,16 @@ public class GhRelAssetWagon extends StreamWagon {
     /**
      * Uploads a release asset to a GitHub repository.
      *
-     * @param repository The name of the GitHub repository.
-     * @param tag        The tag associated with the release.
-     * @param assetName  The name of the asset to be uploaded.
-     * @return The SHA1 hash of the uploaded asset.
-     * @throws Exception If an error occurs during the upload process.
+     * @throws IOException If an error occurs during the upload process.
      */
-    String uploadZipToReleaseAsset(String githubRepository, String tag, String assetName) throws IOException {
+    void uploadZipToReleaseAsset() throws IOException {
+        String githubRepository = ghRelAssetRepository.getGitHubRepository();
+        String tag = ghRelAssetRepository.getTag();
+        String assetName = ghRelAssetRepository.getAssetName();
+
         try {
             // get release from GitHub using the repository and tag
-            System.out.println("GhRelAssetWagon: Uploading asset " + assetName + " to " + repository + " tag " + tag);
+            System.out.println("GhRelAssetWagon: Uploading asset " + assetName + " to " + githubRepository + " tag " + tag);
 
             // 1. Let's assume the tag is created on the latest commit of the default branch
             // - let's get the repository metadata to read it
@@ -728,8 +741,7 @@ public class GhRelAssetWagon extends StreamWagon {
             String releaseId = getOrCreateRelease(githubRepository, tag);
             System.out.println("GhRelAssetWagon: Release ID: " + releaseId);
 
-            String sha1 = getSHA1(this.getRepository().getUrl());
-            File zipRepo = new File(System.getProperty("user.home") + "/.ghrelasset/repos/" + sha1);
+            File zipRepo = zipCacheManager.getCacheFile();
             System.out.println("GhRelAssetWagon: uploadGHReleaseAsset - repo: " + zipRepo);
 
             // Create the asset
@@ -747,8 +759,7 @@ public class GhRelAssetWagon extends StreamWagon {
             } else {
                 throw new IOException("Failed to upload asset. Response code: " + responseCode);
             }
-            return sha1;
-        } catch (IOException | NoSuchAlgorithmException e) {
+        } catch (IOException e) {
             throw new IOException("Failed to upload release asset", e);
         }
     }
@@ -758,8 +769,6 @@ public class GhRelAssetWagon extends StreamWagon {
         try {
             HttpURLConnection connection = createEnhancedConnection(deleteUrl, "DELETE");
             int responseCode = executeEnhancedRequest(connection);
-
-            System.out.println("GhRelAssetWagon: Response code: " + responseCode);
 
             if (responseCode == HttpURLConnection.HTTP_NO_CONTENT) {
                 System.out.println("GhRelAssetWagon: Asset deleted");
@@ -795,21 +804,6 @@ public class GhRelAssetWagon extends StreamWagon {
     }
 
     /**
-     * Calculates the SHA-1 hash value of the given input string.
-     *
-     * @param input the input string to calculate the hash value for
-     * @return the SHA-1 hash value of the input string
-     * @throws Exception if an error occurs during the hash calculation
-     */
-    String getSHA1(String input) throws NoSuchAlgorithmException {
-        MessageDigest md = MessageDigest.getInstance("SHA-1");
-        md.update(input.getBytes());
-        byte[] digest = md.digest();
-        System.out.println("GhRelAssetWagon: SHA-1: " + DatatypeConverter.printHexBinary(digest));
-        return DatatypeConverter.printHexBinary(digest);
-    }
-
-    /**
      * Retrieves a resource from a zip file and copies it to the specified output
      * file path.
      *
@@ -819,13 +813,14 @@ public class GhRelAssetWagon extends StreamWagon {
      * @throws IOException if an I/O error occurs while reading the zip file or
      *                     copying the resource
      */
-    void getResourceFromZip(String zipFilePath, Resource resource, File destination) throws IOException, TransferFailedException {
+    void getResourceFromZip(String zipFilePath, Resource resource, File destination)
+        throws IOException, ResourceDoesNotExistException, TransferFailedException {
         try (ZipFile zipFile = new ZipFile(zipFilePath)) {
             ZipEntry entry = zipFile.getEntry(resource.getName());
 
             if (entry == null) {
                 System.out.println("The resource does not exist in the zip file: " + resource.getName());
-                return;
+                throw new ResourceDoesNotExistException("Resource %s not found".formatted(resource.getName()));
             }
 
             System.out.println("GhRelAssetWagon: getResourceFromZip - copying resource from zip file: "
@@ -838,36 +833,21 @@ public class GhRelAssetWagon extends StreamWagon {
     }
 
     /**
-     * In order to write new files to an existing Zip a new {@link java.io.FileSystem} is created.
-     * A reference is maintained to avoid recreating for each new file, then the Filesystem is closed in {@link #closeConnection()}
-     *
-     * @param zipRepo the zipRepo to initialize the FileSystem for
-     * @throws IOException if an I/O error occurs whilst initializing the FileSystem
-     */
-    void initialiseZipFileSystem(File zipRepo) throws IOException {
-        if (this.stagingZipFileSystem == null || !this.stagingZipFileSystem.isOpen()) {
-            Map<String, String> env = new HashMap<>();
-            env.put("create", "true");
-            URI uri = URI.create("jar:" + zipRepo.toURI());
-            this.stagingZipFileSystem = FileSystems.newFileSystem(uri, env);
-        }
-    }
-
-    /**
      * Adds a resource to a zip file.
      *
-     * @param zipFilePath  the path of the zip file
+     * @param zipFile      the zip file to add to
      * @param resourcePath the path of the resource to be added
      * @param resourceName the name of the resource to be added
      * @throws IOException if an I/O error occurs while reading or writing the zip
      *                     file
      */
-    void addResourceToZip(String zipFilePath, String resourcePath, String resourceName) throws IOException {
+    void addResourceToZip(File zipFile, String resourcePath, String resourceName) throws IOException {
 
-        File zipRepo = new File(zipFilePath);
-        if (!zipRepo.exists()) {
+        if (!zipFile.exists()) {
+            zipFile.getParentFile().mkdirs();
+
             // create a new zip file
-            try (ZipOutputStream zipOutputStream = new ZipOutputStream(new FileOutputStream(zipFilePath))) {
+            try (ZipOutputStream zipOutputStream = new ZipOutputStream(new FileOutputStream(zipFile.getAbsolutePath()))) {
                 // add the new resource to the new zip file
                 zipOutputStream.putNextEntry(new ZipEntry(resourceName));
                 try (InputStream inputStream = new FileInputStream(resourcePath)) {
@@ -883,10 +863,8 @@ public class GhRelAssetWagon extends StreamWagon {
         }
 
         // zip already exists
-        initialiseZipFileSystem(zipRepo);
-
         // write file into zip, replacing any existing file at the same path
-        Path entryPath = this.stagingZipFileSystem.getPath(resourceName);
+        Path entryPath = this.zipCacheManager.getZipFileSystem().getPath(resourceName);
 
         if (entryPath.getParent() != null) {
             Files.createDirectories(entryPath.getParent());
@@ -917,20 +895,14 @@ public class GhRelAssetWagon extends StreamWagon {
         Resource resource = new Resource(resourceName);
         fireGetInitiated(resource, destination);
 
-        String sha1;
-        try {
-            sha1 = getSHA1(this.getRepository().getUrl());
-            File zipRepo = new File(System.getProperty("user.home") + "/.ghrelasset/repos/" + sha1);
-            System.out.println("GhRelAssetWagon: get - repo: " + zipRepo);
-            if (zipRepo.exists()) {
-                // zipRepo is a zip file - get the resource from it
-                System.out.println("GhRelAssetWagon: get - repo exists");
-                getResourceFromZip(zipRepo.toString(), resource, destination);
+        if (!zipCacheManager.isInitialized()) {
+            throw new ResourceDoesNotExistException("Local zip cache is not initialized");
+        }
 
-            } else {
-                downloadGHReleaseAsset("Amadeus-xDLC/github.pinger", "0.0.0", "pinger");
-                org.apache.commons.io.FileUtils.copyFile(zipRepo, destination);
-            }
+        try {
+            File zipRepo = zipCacheManager.getCacheFile();
+            System.out.println("GhRelAssetWagon: get - repo: " + zipRepo);
+            getResourceFromZip(zipRepo.toString(), resource, destination);
         } catch (Exception e) {
             throw new TransferFailedException("Failed to get resource: " + resourceName, e);
         }
@@ -1084,15 +1056,7 @@ public class GhRelAssetWagon extends StreamWagon {
         System.out.println("GhRelAssetWagon: stageArtifact - tagName: " + tagName);
 
         try {
-            String sha1 = getSHA1(this.getRepository().getUrl());
-            File repoDir = new File(System.getProperty("user.home") + "/.ghrelasset/repos/");
-            if (!repoDir.exists()) {
-                repoDir.mkdirs();
-            }
-            File zipRepo = new File(repoDir, sha1);
-            System.out.println("GhRelAssetWagon: stageArtifact - repo: " + zipRepo);
-
-            addResourceToZip(zipRepo.getAbsolutePath(), source.toString(), destination);
+            addResourceToZip(zipCacheManager.getCacheFile(), source.toString(), destination);
             this.artifactsToUpload.add(source.toString());
 
         } catch (Exception e) {
@@ -1299,15 +1263,31 @@ public class GhRelAssetWagon extends StreamWagon {
         System.out.println("GhRelAssetWagon: Username: " + this.authenticationInfo.getUserName());
         System.out.println("GhRelAssetWagon: Repository: " + this.getRepository().getUrl());
 
+        // initialize class members
         this.authenticationInfo = new AuthenticationInfo();
         this.authenticationInfo.setUserName("ghrelasset");
+        this.authenticationInfo.setPassword(getAuthenticationToken());
+
+        this.ghRelAssetRepository = new GhRelAssetRepository(this.repository);
+
+        // initialize local zip cache
+        try {
+            InputStream is = downloadGHReleaseAsset();
+            this.zipCacheManager.initialize(this.ghRelAssetRepository, is);
+        } catch (Exception e) {
+            throw new ConnectionException("Failed to download zip", e);
+        }
+
+        System.out.println(this.rateLimitHandler.getStatus());
+    }
+
+    private String getAuthenticationToken() throws AuthenticationException {
         String token = System.getenv("GH_RELEASE_ASSET_TOKEN");
         if (token == null) {
             throw new AuthenticationException("GH_RELEASE_ASSET_TOKEN is not set");
         }
 
-        // if the value of the token is a valid path to a file, then read the token from
-        // it
+        // if the value of the token is a valid path to a file, then read the token from it
         if (new File(token).exists()) {
             try {
                 token = FileUtils.fileRead(token).strip();
@@ -1315,35 +1295,20 @@ public class GhRelAssetWagon extends StreamWagon {
                 throw new AuthenticationException("Failed to read token from file: " + token);
             }
         }
-
-        this.authenticationInfo.setPassword(token);
-
-        if (this.getRepository().getUrl().endsWith(".zip")) {
-            System.out.println("GhRelAssetWagon: Downloading the zip file");
-            String[] parts = this.getRepository().getUrl().split("/");
-            try {
-                downloadGHReleaseAsset(parts[2] + "/" + parts[3], parts[4], parts[5]);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
-
-        System.out.println(this.rateLimitHandler.getStatus());
+        return token;
     }
 
     /**
      * Closes the connection and performs any necessary cleanup operations.
      * If there are artifacts to upload, it uploads them to the repository.
-     * If the repository URL ends with ".zip", it also downloads the zip file.
+     * If the repository URL ends with ".zip", it also uploads the zip file.
      * 
      * @throws ConnectionException if there is an error closing the connection.
      */
     @Override
     public void closeConnection() throws ConnectionException {
         try {
-            if (stagingZipFileSystem != null) {
-                stagingZipFileSystem.close();
-            }
+            zipCacheManager.close();
 
             // Skip processing in test environments
             if (isTestEnvironment()) {
@@ -1360,16 +1325,7 @@ public class GhRelAssetWagon extends StreamWagon {
                     System.out.println("GhRelAssetWagon: Closing connection - uploading artifact: " + artifact);
                 }
 
-                if (this.getRepository().getUrl().endsWith(".zip")) {
-                    System.out.println("GhRelAssetWagon: Uploading the zip file");
-                    String[] parts = this.getRepository().getUrl().split("/");
-                    try {
-                        String uploadedAssetSha1 = uploadZipToReleaseAsset(parts[2] + "/" + parts[3], parts[4], parts[5]);
-                        System.out.println("GhRelAssetWagon[closeConnection]: Uploaded asset SHA1: " + uploadedAssetSha1);
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
-                }
+                uploadZipToReleaseAsset();
 
                 this.artifactsToUpload.clear();
             }
@@ -1643,72 +1599,17 @@ public class GhRelAssetWagon extends StreamWagon {
             throws TransferFailedException, AuthorizationException {
         System.out.println("GhRelAssetWagon: Checking if resource exists: " + resourceName);
         
+        if (!zipCacheManager.isInitialized()) {
+            return false;
+        }
+
         try {
-            // Parse repository and tag from URL
-            String repoUrl = this.getRepository().getUrl();
-            // Handle both ghrelasset:// and regular URL formats
-            if (repoUrl.startsWith("ghrelasset://")) {
-                repoUrl = repoUrl.substring("ghrelasset://".length());
-            }
-            String[] urlParts = repoUrl.split("/");
-            if (urlParts.length < 3) {
-                throw new TransferFailedException("Invalid repository URL format");
-            }
-            
-            String repository = urlParts[0] + "/" + urlParts[1];
-            String tag = urlParts[2];
-            String assetName = resourceName.substring(resourceName.lastIndexOf("/") + 1);
-            
-            // Get release information
-            String releaseId;
-            try {
-                releaseId = getReleaseId(repository, tag);
-            } catch (IOException e) {
-                System.out.println("GhRelAssetWagon: Release not found for tag: " + tag + " - " + e.getMessage());
-                return false; // Release doesn't exist
-            }
-            if (releaseId == null) {
-                System.out.println("GhRelAssetWagon: Release not found for tag: " + tag);
-                return false; // Release doesn't exist
-            }
-            
-            // Check if asset exists in the release
-            URL url = new URL(apiEndpoint + "/repos/" + repository + "/releases/" + releaseId + "/assets");
-            HttpURLConnection connection;
-            try {
-                connection = createEnhancedConnection(url, "GET");
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IOException("Interrupted while creating connection", e);
-            }
-            int responseCode = executeEnhancedRequest(connection);
-            if (responseCode == HttpURLConnection.HTTP_OK) {
-                InputStream inputStream = connection.getInputStream();
-                ObjectMapper objectMapper = new ObjectMapper();
-                JsonNode rootNode = objectMapper.readTree(inputStream.readAllBytes());
-                
-                // Search for the asset by name
-                for (JsonNode assetNode : rootNode) {
-                    JsonNode nameNode = assetNode.path("name");
-                    if (nameNode.asText().equals(assetName)) {
-                        System.out.println("GhRelAssetWagon: Resource exists: " + resourceName);
-                        return true;
-                    }
-                }
-                
-                System.out.println("GhRelAssetWagon: Resource not found: " + resourceName);
-                return false;
-            } else if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
-                System.out.println("GhRelAssetWagon: Release not found, resource does not exist: " + resourceName);
-                return false;
-            } else {
-                throw new TransferFailedException("Failed to check resource existence. HTTP response code: " + responseCode);
-            }
-            
+            boolean exists = Files.exists(this.zipCacheManager.getZipFileSystem().getPath(resourceName));
+            System.out.println("GhRelAssetWagon: Resource " + resourceName + " exists: " + exists);
+
+            return exists;
         } catch (IOException e) {
-            throw new TransferFailedException("Failed to check resource existence: " + e.getMessage(), e);
-        } catch (Exception e) {
-            throw new TransferFailedException("Unexpected error during resourceExists: " + e.getMessage(), e);
+            throw new TransferFailedException("Failed to check if resource exists: " + resourceName, e);
         }
     }
 
@@ -2182,8 +2083,7 @@ public class GhRelAssetWagon extends StreamWagon {
         }
         
         try {
-            String sha1 = getSHA1(this.getRepository().getUrl());
-            File zipRepo = new File(System.getProperty("user.home") + "/.ghrelasset/repos/" + sha1);
+            File zipRepo = zipCacheManager.getCacheFile();
 
             // create output streams (maven will close them for us)
             if (!zipRepo.exists()) {
@@ -2194,22 +2094,13 @@ public class GhRelAssetWagon extends StreamWagon {
                 return;
             } else {
                 // zip already exists
-                if (stagingZipFileSystem == null) {
-                    Map<String, String> env = new HashMap<>();
-                    env.put("create", "true");
-                    URI uri = URI.create("jar:" + zipRepo.toURI());
-
-                    // write file into zip, replacing any existing file at the same path
-                    stagingZipFileSystem = FileSystems.newFileSystem(uri, env);
-                }
-
-                Path entryPath = stagingZipFileSystem.getPath(resourceName);
+                Path entryPath = this.zipCacheManager.getZipFileSystem().getPath(resourceName);
                 outputData.setOutputStream(Files.newOutputStream(entryPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING));
             }
             
             artifactsToUpload.add(resourceName);
             
-        } catch (IOException | NoSuchAlgorithmException e) {
+        } catch (IOException e) {
             // Fire transfer error event
             fireTransferError(outputData.getResource(), e, TransferEvent.REQUEST_PUT);
             throw new TransferFailedException("Failed to configure output stream for " + resourceName, e);
