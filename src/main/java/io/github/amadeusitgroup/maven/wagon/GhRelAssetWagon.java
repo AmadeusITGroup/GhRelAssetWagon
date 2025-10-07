@@ -42,6 +42,8 @@ import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * The GhRelAssetWagon class is a custom implementation of the StreamWagon
@@ -59,6 +61,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * and managing GitHub releases and tags.
  */
 public class GhRelAssetWagon extends StreamWagon {
+
+    Logger logger = LoggerFactory.getLogger(GhRelAssetWagon.class);
 
     /**
      * The list of artifacts to upload.
@@ -377,7 +381,7 @@ public class GhRelAssetWagon extends StreamWagon {
 
                 return idNode.asText();
             } else if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
-                System.out.println("GhRelAssetWagon: Release with tag " + tag + " not found");
+                logger.debug("GhRelAssetWagon: Release with tag {} not found", tag);
                 return null;
             } else if (responseCode == HttpURLConnection.HTTP_MOVED_PERM
                     || responseCode == HttpURLConnection.HTTP_MOVED_TEMP
@@ -416,7 +420,7 @@ public class GhRelAssetWagon extends StreamWagon {
         // Note: we cannot follow redirects automatically - we need to do it manually
         int maxRedirects = 5;
         for (int i = 0; i < maxRedirects; i++) {
-            System.out.println("GhRelAssetWagon: getAssetId url: " + url);
+            logger.debug("getAssetId url: {}", url);
             HttpURLConnection connection;
             try {
                 connection = createEnhancedConnection(url, "GET");
@@ -432,12 +436,10 @@ public class GhRelAssetWagon extends StreamWagon {
                 JsonNode rootNode = objectMapper.readTree(inputStream.readAllBytes());
 
                 for (JsonNode assetNode : rootNode) {
-                    // System.out.println("GhRelAssetWagon: getAssetId assetNode: " + assetNode);
                     JsonNode nameNode = assetNode.path("name");
-                    // System.out.println("GhRelAssetWagon: getAssetId name: " + nameNode.asText());
                     if (nameNode.asText().equals(assetName)) {
                         JsonNode idNode = assetNode.path("id");
-                        System.out.println("GhRelAssetWagon: getAssetId id: " + idNode.asInt());
+                        logger.debug("getAssetId id: {}", idNode.asInt());
                         return idNode.asText();
                     }
                 }
@@ -470,16 +472,16 @@ public class GhRelAssetWagon extends StreamWagon {
         String assetName = ghRelAssetRepository.getAssetName();
 
         // get release from github using the repository and tag
-        System.out.println("GhRelAssetWagon: Downloading asset " + assetName + " from " + ghRepo + " tag " + tag);
+        logger.info("Downloading asset {} from {} tag {}...", assetName, ghRepo, tag);
         String assetId = getAssetId(ghRepo, tag, assetName);
 
         if (assetId == null) {
             return null;
         }
-        System.out.println("GhRelAssetWagon: Asset ID: " + assetId);
+        logger.debug("Asset ID: {}", assetId);
 
         URL url = new URL(apiEndpoint + "/repos/" + ghRepo + "/releases/assets/" + assetId);
-        System.out.println("GhRelAssetWagon: Downloading asset from " + url);
+        logger.debug("Downloading asset from {}", url);
 
         // Note: we cannot follow redirects automatically - we need to do it manually
         int maxRedirects = 5;
@@ -494,11 +496,11 @@ public class GhRelAssetWagon extends StreamWagon {
             // Override Accept header for binary download
             connection.setRequestProperty("Accept", "application/octet-stream");
             int responseCode = executeEnhancedRequest(connection);
-            System.out.println("GhRelAssetWagon: DownloadGHReleaseAsset Response code: " + responseCode);
+            logger.debug("DownloadGHReleaseAsset Response code: {}", responseCode);
             if (responseCode == HttpURLConnection.HTTP_OK) {
                 return connection.getInputStream();
             } else if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
-                System.out.println("GhRelAssetWagon: Asset ID " + assetId + " not found");
+                logger.debug("Asset ID {} not found", assetId);
                 return null;
             } else if (responseCode == HttpURLConnection.HTTP_MOVED_PERM
                     || responseCode == HttpURLConnection.HTTP_MOVED_TEMP
@@ -539,14 +541,14 @@ public class GhRelAssetWagon extends StreamWagon {
             int responseCode = executeEnhancedRequest(connection);
             connection.disconnect();
             connection = null;
-            System.out.println("GhRelAssetWagon:checkOrCreateTag Response code: " + responseCode);
+            logger.debug("checkOrCreateTag Response code: {}", responseCode);
 
             if (responseCode == HttpURLConnection.HTTP_OK) {
-                System.out.println("GhRelAssetWagon: Tag exists");
+                logger.debug("Tag exists");
                 // return the tag
                 return tag;
             } else if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
-                System.out.println("GhRelAssetWagon: Tag does not exist");
+                logger.debug("Tag does not exist");
 
                 // create the tag
                 url = new URL(apiEndpoint + "/repos/" + repository + "/git/tags");
@@ -562,18 +564,17 @@ public class GhRelAssetWagon extends StreamWagon {
                     + "\",\"message\":\"Tag created by GhRhelAssetWagon\",\"object\":\"" + commit
                     + "\",\"type\":\"commit\",\"email\":\"GhRhelAssetWagon@noreply.com\""
                     + "\"}}";
-                System.out.println("GhRelAssetWagon:checkOrCreateTag Request body: " + requestBody);
+                logger.debug("checkOrCreateTag Request body: {}", requestBody);
 
                 connection.setDoOutput(true);
                 connection.getOutputStream().write(requestBody.getBytes());
 
                 responseCode = executeEnhancedRequest(connection);
-                System.out.println("GhRelAssetWagon:checkOrCreateTag Response code: " + responseCode);
-                System.out.println(
-                    "GhRelAssetWagon:checkOrCreateTag Response message: " + connection.getResponseMessage());
+                logger.debug("checkOrCreateTag Response code: {}", responseCode);
+                logger.debug("checkOrCreateTag Response message: {}", connection.getResponseMessage());
 
                 if (responseCode == HttpURLConnection.HTTP_CREATED) {
-                    System.out.println("GhRelAssetWagon: Tag created");
+                    logger.debug("Tag created");
                 } else {
                     throw new IOException("Failed to create tag");
                 }
@@ -610,7 +611,7 @@ public class GhRelAssetWagon extends StreamWagon {
         }
         int responseCode = executeEnhancedRequest(connection);
         if (responseCode == HttpURLConnection.HTTP_OK) {
-            System.out.println("GhRelAssetWagon: Release exists");
+            logger.debug("Release exists");
             // get release id
             InputStream inputStream = connection.getInputStream();
             ObjectMapper objectMapper = new ObjectMapper();
@@ -620,7 +621,7 @@ public class GhRelAssetWagon extends StreamWagon {
             connection = null;
             return idNode.asText();
         } else if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
-            System.out.println("GhRelAssetWagon: Release does not exist");
+            logger.debug("Release does not exist");
 
             // create the release
             url = new URL(apiEndpoint + "/repos/" + repository + "/releases");
@@ -641,7 +642,7 @@ public class GhRelAssetWagon extends StreamWagon {
 
             responseCode = executeEnhancedRequest(connection);
             if (responseCode == HttpURLConnection.HTTP_CREATED) {
-                System.out.println("GhRelAssetWagon: Release created");
+                logger.debug("Release created");
                 // get release id
                 InputStream inputStream = connection.getInputStream();
                 ObjectMapper objectMapper = new ObjectMapper();
@@ -726,7 +727,7 @@ public class GhRelAssetWagon extends StreamWagon {
 
         try {
             // get release from GitHub using the repository and tag
-            System.out.println("GhRelAssetWagon: Uploading asset " + assetName + " to " + githubRepository + " tag " + tag);
+            logger.info("Uploading asset {} to {} tag {}", assetName, githubRepository, tag);
 
             // 1. Let's assume the tag is created on the latest commit of the default branch
             // - let's get the repository metadata to read it
@@ -739,13 +740,12 @@ public class GhRelAssetWagon extends StreamWagon {
             getOrCreateTag(githubRepository, tag, latestCommit);
 
             String releaseId = getOrCreateRelease(githubRepository, tag);
-            System.out.println("GhRelAssetWagon: Release ID: " + releaseId);
+            logger.debug("Release ID: {}", releaseId);
 
             File zipRepo = zipCacheManager.getCacheFile();
-            System.out.println("GhRelAssetWagon: uploadGHReleaseAsset - repo: " + zipRepo);
+            logger.debug("uploadZipToReleaseAsset - repo: {}", zipRepo);
 
             // Create the asset
-
             String assetId = getAssetId(githubRepository, tag, assetName);
 
             if (assetId != null) {
@@ -755,7 +755,7 @@ public class GhRelAssetWagon extends StreamWagon {
             int responseCode = uploadAsset(githubRepository, releaseId, assetName, zipRepo);
 
             if (responseCode == HttpURLConnection.HTTP_CREATED) {
-                System.out.println("GhRelAssetWagon: Asset uploaded");
+                logger.info("New release asset uploaded");
             } else {
                 throw new IOException("Failed to upload asset. Response code: " + responseCode);
             }
@@ -771,7 +771,7 @@ public class GhRelAssetWagon extends StreamWagon {
             int responseCode = executeEnhancedRequest(connection);
 
             if (responseCode == HttpURLConnection.HTTP_NO_CONTENT) {
-                System.out.println("GhRelAssetWagon: Asset deleted");
+                logger.debug("Asset deleted");
             } else {
                 throw new IOException("Failed to delete existing asset");
             }
@@ -819,12 +819,11 @@ public class GhRelAssetWagon extends StreamWagon {
             ZipEntry entry = zipFile.getEntry(resource.getName());
 
             if (entry == null) {
-                System.out.println("The resource does not exist in the zip file: " + resource.getName());
+                logger.debug("The resource does not exist in the zip file: {}", resource.getName());
                 throw new ResourceDoesNotExistException("Resource %s not found".formatted(resource.getName()));
             }
 
-            System.out.println("GhRelAssetWagon: getResourceFromZip - copying resource from zip file: "
-                + resource.getName() + " to " + destination.toPath());
+            logger.debug("getResourceFromZip - copying resource from zip file: {} to {}", resource.getName(), destination.toPath());
             InputStream inputStream = zipFile.getInputStream(entry);
 
             fireGetStarted(resource, destination);
@@ -891,7 +890,7 @@ public class GhRelAssetWagon extends StreamWagon {
     @Override
     public void get(String resourceName, File destination)
             throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
-        System.out.println("GhRelAssetWagon: Getting resource '" + resourceName + "' to '" + destination + "'");
+        logger.debug("Getting resource '{}' to '{}", resourceName, destination);
         Resource resource = new Resource(resourceName);
         fireGetInitiated(resource, destination);
 
@@ -901,7 +900,7 @@ public class GhRelAssetWagon extends StreamWagon {
 
         try {
             File zipRepo = zipCacheManager.getCacheFile();
-            System.out.println("GhRelAssetWagon: get - repo: " + zipRepo);
+            logger.debug("get - repo: {}", zipRepo);
             getResourceFromZip(zipRepo.toString(), resource, destination);
         } catch (Exception e) {
             throw new TransferFailedException("Failed to get resource: " + resourceName, e);
@@ -927,8 +926,7 @@ public class GhRelAssetWagon extends StreamWagon {
     @Override
     public boolean getIfNewer(String resourceName, File destination, long timestamp)
             throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
-        System.out.println(
-                "GhRelAssetWagon: getIfNewer " + resourceName + " to " + destination + " timestamp " + timestamp);
+        logger.debug("getIfNewer {} to {} timestamp {}", resourceName, destination, timestamp);
         
         try {
             // Parse repository and tag from URL
@@ -951,7 +949,7 @@ public class GhRelAssetWagon extends StreamWagon {
             try {
                 releaseId = getReleaseId(repository, tag);
             } catch (IOException e) {
-                System.out.println("GhRelAssetWagon: Release not found for tag: " + tag + " - " + e.getMessage());
+                logger.debug("Release not found for tag: {} - {}", tag, e.getMessage());
                 return false; // Release doesn't exist
             }
             if (releaseId == null) {
@@ -992,7 +990,7 @@ public class GhRelAssetWagon extends StreamWagon {
                                 return false;
                             }
                         } catch (DateTimeParseException e) {
-                            System.err.println("GhRelAssetWagon: Failed to parse asset timestamp: " + updatedAtStr);
+                            logger.error("Failed to parse asset timestamp: {}", updatedAtStr);
                             // If we can't parse timestamp, fall back to regular get
                             get(resourceName, destination);
                             return true;
@@ -1052,8 +1050,8 @@ public class GhRelAssetWagon extends StreamWagon {
         String releaseName = this.getRepository().getUrl().substring(0, this.getRepository().getUrl().lastIndexOf("/"));
         String tagName = this.getRepository().getUrl().substring(this.getRepository().getUrl().lastIndexOf("/") + 1);
 
-        System.out.println("GhRelAssetWagon: stageArtifact - releaseName: " + releaseName);
-        System.out.println("GhRelAssetWagon: stageArtifact - tagName: " + tagName);
+        logger.debug("stageArtifact - releaseName: {}", releaseName);
+        logger.debug("stageArtifact - tagName: {}", tagName);
 
         try {
             addResourceToZip(zipCacheManager.getCacheFile(), source.toString(), destination);
@@ -1115,14 +1113,14 @@ public class GhRelAssetWagon extends StreamWagon {
         RepositoryValidator.ValidationResult validation = RepositoryValidator.validateRepositoryPath(destination);
         if (!validation.isValid()) {
             // Skip metadata generation for non-Maven paths
-            System.out.println("GhRelAssetWagon: Skipping metadata generation for non-Maven path: " + destination);
+            logger.debug("Skipping metadata generation for non-Maven path: {}", destination);
             return;
         }
         
         // Extract coordinates using the validator
         RepositoryValidator.MavenCoordinates coordinates = RepositoryValidator.extractCoordinates(destination);
         if (coordinates == null) {
-            System.out.println("GhRelAssetWagon: Could not extract coordinates from path: " + destination);
+            logger.debug("Could not extract coordinates from path: {}", destination);
             return;
         }
         
@@ -1259,9 +1257,10 @@ public class GhRelAssetWagon extends StreamWagon {
     @Override
     protected void openConnectionInternal() throws ConnectionException, AuthenticationException {
 
-        System.out.println("GhRelAssetWagon: openConnectionInternal");
-        System.out.println("GhRelAssetWagon: Username: " + this.authenticationInfo.getUserName());
-        System.out.println("GhRelAssetWagon: Repository: " + this.getRepository().getUrl());
+        logger.info("====== GhRelAssetWagon ======");
+        logger.info("==== Opening connection ====");
+        logger.debug("Username: {}", this.authenticationInfo.getUserName());
+        logger.debug("Repository: {}", this.getRepository().getUrl());
 
         // initialize class members
         this.authenticationInfo = new AuthenticationInfo();
@@ -1274,11 +1273,12 @@ public class GhRelAssetWagon extends StreamWagon {
         try {
             InputStream is = downloadGHReleaseAsset();
             this.zipCacheManager.initialize(this.ghRelAssetRepository, is);
+            logger.info("Local cache initialized at path {}", zipCacheManager.getCacheFile().getAbsolutePath());
         } catch (Exception e) {
             throw new ConnectionException("Failed to download zip", e);
         }
 
-        System.out.println(this.rateLimitHandler.getStatus());
+        logger.info(this.rateLimitHandler.getStatus().toString());
     }
 
     private String getAuthenticationToken() throws AuthenticationException {
@@ -1306,7 +1306,8 @@ public class GhRelAssetWagon extends StreamWagon {
      * @throws ConnectionException if there is an error closing the connection.
      */
     @Override
-    public void closeConnection() throws ConnectionException {
+    public void closeConnection() {
+        logger.info("==== Closing connection ====");
         try {
             zipCacheManager.close();
 
@@ -1320,27 +1321,30 @@ public class GhRelAssetWagon extends StreamWagon {
             
             // Handle legacy artifacts to upload
             if (this.artifactsToUpload != null && !this.artifactsToUpload.isEmpty()) {
-                System.out.println("GhRelAssetWagon: Closing connection - uploading legacy artifacts");
+                logger.debug("Closing connection - uploading legacy artifacts");
                 for (String artifact : this.artifactsToUpload) {
-                    System.out.println("GhRelAssetWagon: Closing connection - uploading artifact: " + artifact);
+                    logger.debug("Closing connection - uploading artifact: {}", artifact);
                 }
 
                 uploadZipToReleaseAsset();
 
                 this.artifactsToUpload.clear();
             }
-            
-            // Clean up temporary files
-            cleanupTempFiles();
-            
-            // Close any pooled connections
-            if (connectionPoolManager != null) {
-                connectionPoolManager.shutdown();
-            }
-            
         } catch (Exception e) {
-            throw new ConnectionException("Failed to close connection properly", e);
+            // don't throw ConnectionException as Maven doesn't consider it fatal when thrown from closeConnection
+            throw new RuntimeException("Error closing connection", e);
         }
+
+        // Clean up temporary files
+        cleanupTempFiles();
+
+        // Close any pooled connections
+        if (connectionPoolManager != null) {
+            connectionPoolManager.shutdown();
+        }
+
+        logger.info("==== Closed connection ====");
+        logger.info("====== /GhRelAssetWagon ======");
     }
 
     void setAuthenticationInfo(AuthenticationInfo authenticationInfo) {
@@ -1486,9 +1490,9 @@ public class GhRelAssetWagon extends StreamWagon {
         try {
             asyncOperationManager.shutdown();
             connectionPoolManager.shutdown();
-            System.out.println("GhRelAssetWagon: Performance handlers shut down successfully");
+            logger.debug("Performance handlers shut down successfully");
         } catch (Exception e) {
-            System.err.println("GhRelAssetWagon: Error during shutdown: " + e.getMessage());
+            logger.error("Error during shutdown: {}", e.getMessage());
         }
     }
 
@@ -1508,7 +1512,7 @@ public class GhRelAssetWagon extends StreamWagon {
     @Override
     public List<String> getFileList(String destinationDirectory)
             throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
-        System.out.println("GhRelAssetWagon: getFileList for directory: " + destinationDirectory);
+        logger.debug("getFileList for directory: {}", destinationDirectory);
         
         List<String> fileList = new ArrayList<>();
         
@@ -1532,11 +1536,11 @@ public class GhRelAssetWagon extends StreamWagon {
             try {
                 releaseId = getReleaseId(repository, tag);
             } catch (IOException e) {
-                System.out.println("GhRelAssetWagon: Release not found for tag: " + tag + " - " + e.getMessage());
+                logger.debug("Release not found for tag: {} - {}", tag, e.getMessage());
                 return fileList; // Return empty list if release doesn't exist
             }
             if (releaseId == null) {
-                System.out.println("GhRelAssetWagon: Release not found for tag: " + tag);
+                logger.debug("Release not found for tag: {}", tag);
                 return fileList; // Return empty list if release doesn't exist
             }
             
@@ -1566,10 +1570,10 @@ public class GhRelAssetWagon extends StreamWagon {
                         fileList.add(assetName);
                     }
                 }
-                
-                System.out.println("GhRelAssetWagon: Found " + fileList.size() + " files in directory: " + destinationDirectory);
+
+                logger.debug("Found {} files in directory: {}", fileList.size(), destinationDirectory);
             } else if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
-                System.out.println("GhRelAssetWagon: Release assets not found for: " + repository + "/" + tag);
+                logger.debug("Release assets not found for: {}/{}", repository, tag);
                 return fileList; // Return empty list
             } else {
                 throw new TransferFailedException("Failed to retrieve file list. HTTP response code: " + responseCode);
@@ -1597,7 +1601,7 @@ public class GhRelAssetWagon extends StreamWagon {
     @Override
     public boolean resourceExists(String resourceName)
             throws TransferFailedException, AuthorizationException {
-        System.out.println("GhRelAssetWagon: Checking if resource exists: " + resourceName);
+        logger.debug("Checking if resource exists: {}", resourceName);
         
         if (!zipCacheManager.isInitialized()) {
             return false;
@@ -1605,7 +1609,7 @@ public class GhRelAssetWagon extends StreamWagon {
 
         try {
             boolean exists = Files.exists(this.zipCacheManager.getZipFileSystem().getPath(resourceName));
-            System.out.println("GhRelAssetWagon: Resource " + resourceName + " exists: " + exists);
+            logger.debug("Resource {} exists: {}", resourceName, exists);
 
             return exists;
         } catch (IOException e) {
@@ -1627,7 +1631,7 @@ public class GhRelAssetWagon extends StreamWagon {
     @Override
     public void putDirectory(File sourceDirectory, String destinationDirectory)
             throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
-        System.out.println("GhRelAssetWagon: putDirectory from " + sourceDirectory + " to " + destinationDirectory);
+        logger.debug("putDirectory from {} to {}", sourceDirectory, destinationDirectory);
         
         // Track metrics for directory upload
         long startTime = System.currentTimeMillis();
@@ -1652,7 +1656,7 @@ public class GhRelAssetWagon extends StreamWagon {
             List<String> allDestinations = new ArrayList<>();
             collectFilesRecursively(sourceDirectory, destinationDirectory, "", allFiles, allDestinations);
             
-            System.out.println("GhRelAssetWagon: Found " + allFiles.size() + " files to upload");
+            logger.debug("Found {} files to upload", allFiles.size());
             metricsCollector.setGauge("directory.uploads.file.count", allFiles.size());
             
             // Apply delta sync if enabled
@@ -1665,12 +1669,12 @@ public class GhRelAssetWagon extends StreamWagon {
                             repositoryId, allFiles, new DeltaSyncManager.SyncHandler() {
                                 @Override
                                 public void syncFile(File file, DeltaSyncManager.SyncOperation operation) {
-                                    System.out.println("Delta sync: " + operation + " for " + file.getName());
+                                    logger.debug("Delta sync: {} for {}", operation, file.getName());
                                 }
                                 
                                 @Override
                                 public void deleteFile(String path) {
-                                    System.out.println("Delta sync: DELETE for " + path);
+                                    logger.debug("Delta sync: DELETE for {}", path);
                                 }
                             });
                         
@@ -1689,12 +1693,12 @@ public class GhRelAssetWagon extends StreamWagon {
                         allFiles = filesToUpload;
                         allDestinations = destinationsToUpload;
                         
-                        System.out.println("GhRelAssetWagon: Delta sync reduced upload to " + allFiles.size() + " files");
+                        logger.debug("Delta sync reduced upload to {} files", allFiles.size());
                         metricsCollector.incrementCounter("directory.uploads.delta.sync.applied");
                         metricsCollector.setGauge("directory.uploads.delta.reduced.count", allFiles.size());
                     }
                 } catch (Exception e) {
-                    System.out.println("GhRelAssetWagon: Warning - Delta sync failed for directory: " + e.getMessage());
+                    logger.warn("Warning - Delta sync failed for directory: {}", e.getMessage());
                     metricsCollector.incrementCounter("directory.uploads.delta.sync.failed");
                 }
             }
@@ -1719,11 +1723,11 @@ public class GhRelAssetWagon extends StreamWagon {
                         });
                     
                     List<ParallelOperationManager.UploadResult> results = uploadFuture.get();
-                    System.out.println("GhRelAssetWagon: Parallel directory upload completed with " + results.size() + " files");
+                    logger.debug("Parallel directory upload completed with {} files", results.size());
                     metricsCollector.incrementCounter("directory.uploads.parallel.executed");
                     
                 } catch (Exception e) {
-                    System.out.println("GhRelAssetWagon: Warning - Parallel directory upload failed, falling back to sequential: " + e.getMessage());
+                    logger.warn("Warning - Parallel directory upload failed, falling back to sequential: {}", e.getMessage());
                     metricsCollector.incrementCounter("directory.uploads.parallel.fallback");
                     // Fall back to sequential upload
                     uploadFilesSequentially(allFiles, allDestinations);
@@ -1776,7 +1780,7 @@ public class GhRelAssetWagon extends StreamWagon {
         for (int i = 0; i < files.size(); i++) {
             File file = files.get(i);
             String destination = destinations.get(i);
-            System.out.println("GhRelAssetWagon: Uploading file: " + file + " to " + destination);
+            logger.debug("Uploading file: {} to {}", file, destination);
             put(file, destination);
         }
     }
@@ -1791,7 +1795,7 @@ public class GhRelAssetWagon extends StreamWagon {
      */
     @Override
     public void put(File source, String destination) throws TransferFailedException {
-        System.out.println("GhRelAssetWagon: put " + source.getAbsolutePath() + " to " + destination);
+        logger.debug("put {} to {}", source.getAbsolutePath(), destination);
         
         // Track metrics for the upload operation
         long startTime = System.currentTimeMillis();
@@ -1806,7 +1810,7 @@ public class GhRelAssetWagon extends StreamWagon {
             // Validate repository path structure
             RepositoryValidator.ValidationResult validation = RepositoryValidator.validateRepositoryPath(destination);
             if (!validation.isValid()) {
-                System.out.println("GhRelAssetWagon: Repository path validation failed: " + validation.getMessage());
+                logger.debug("Repository path validation failed: {}", validation.getMessage());
                 metricsCollector.incrementCounter("uploads.validation.failed");
                 // Log warning but continue - some legacy paths might not be perfectly compliant
             }
@@ -1824,9 +1828,9 @@ public class GhRelAssetWagon extends StreamWagon {
                     compressionHandler.compressFile(source, tempCompressed);
                     fileToUpload = tempCompressed;
                     metricsCollector.incrementCounter("uploads.compressed");
-                    System.out.println("GhRelAssetWagon: Compressed " + source.getName() + " for upload");
+                    logger.debug("Compressed {} for upload", source.getName());
                 } catch (Exception e) {
-                    System.out.println("GhRelAssetWagon: Warning - Failed to compress file: " + e.getMessage());
+                    logger.warn("Warning - Failed to compress file: {}", e.getMessage());
                     metricsCollector.incrementCounter("uploads.compression.failed");
                     // Continue with original file
                 }
@@ -1843,24 +1847,24 @@ public class GhRelAssetWagon extends StreamWagon {
                             repositoryId, currentFiles, new DeltaSyncManager.SyncHandler() {
                                 @Override
                                 public void syncFile(File file, DeltaSyncManager.SyncOperation operation) {
-                                    System.out.println("Delta sync: " + operation + " for " + file.getName());
+                                    logger.debug("Delta sync: {} for {}", operation, file.getName());
                                 }
                                 
                                 @Override
                                 public void deleteFile(String path) {
-                                    System.out.println("Delta sync: DELETE for " + path);
+                                    logger.debug("Delta sync: DELETE for {}", path);
                                 }
                             });
                         
                         if (syncResult.getAddedFiles().isEmpty() && syncResult.getModifiedFiles().isEmpty()) {
-                            System.out.println("GhRelAssetWagon: File unchanged, skipping upload via delta sync");
+                            logger.debug("File unchanged, skipping upload via delta sync");
                             metricsCollector.incrementCounter("uploads.skipped.unchanged");
                             return;
                         }
                         metricsCollector.incrementCounter("uploads.delta.sync.applied");
                     }
                 } catch (Exception e) {
-                    System.out.println("GhRelAssetWagon: Warning - Delta sync failed: " + e.getMessage());
+                    logger.warn("Warning - Delta sync failed: {}", e.getMessage());
                     metricsCollector.incrementCounter("uploads.delta.sync.failed");
                     // Continue with normal upload
                 }
@@ -1873,7 +1877,7 @@ public class GhRelAssetWagon extends StreamWagon {
                     metricsCollector.incrementCounter("uploads.checksums.generated");
                 } catch (Exception e) {
                     // Log warning but don't fail the upload for checksum generation issues
-                    System.out.println("GhRelAssetWagon: Warning - Failed to generate checksums for " + destination + ": " + e.getMessage());
+                    logger.warn("Warning - Failed to generate checksums for {}: {}",destination, e.getMessage());
                     metricsCollector.incrementCounter("uploads.checksums.failed");
                 }
             }
@@ -1896,7 +1900,7 @@ public class GhRelAssetWagon extends StreamWagon {
                     uploadFuture.get();
                     metricsCollector.incrementCounter("uploads.parallel.executed");
                 } catch (Exception e) {
-                    System.out.println("GhRelAssetWagon: Warning - Parallel upload failed, falling back to sequential: " + e.getMessage());
+                    logger.warn("Warning - Parallel upload failed, falling back to sequential: {}", e.getMessage());
                     stageArtifact(fileToUpload, destination);
                     metricsCollector.incrementCounter("uploads.parallel.fallback");
                 }
@@ -1914,7 +1918,7 @@ public class GhRelAssetWagon extends StreamWagon {
                     metricsCollector.incrementCounter("uploads.metadata.generated");
                 } catch (Exception e) {
                     // Log warning but don't fail the upload for metadata generation issues
-                    System.out.println("GhRelAssetWagon: Warning - Failed to generate metadata for " + destination + ": " + e.getMessage());
+                    logger.warn("Warning - Failed to generate metadata for {}: {}", destination, e.getMessage());
                     metricsCollector.incrementCounter("uploads.metadata.failed");
                 }
             }
@@ -2200,7 +2204,7 @@ public class GhRelAssetWagon extends StreamWagon {
             try {
                 uploadFileToGitHub(new File(tempFilePath), resourceName);
             } catch (Exception e) {
-                System.err.println("Failed to upload " + resourceName + ": " + e.getMessage());
+                logger.error("Failed to upload {}: {}", resourceName, e.getMessage());
                 throw e;
             }
         }
@@ -2218,7 +2222,7 @@ public class GhRelAssetWagon extends StreamWagon {
                     tempFile.delete();
                 }
             } catch (Exception e) {
-                System.err.println("Failed to cleanup temp file " + tempFilePath + ": " + e.getMessage());
+                logger.error("Failed to cleanup temp file {}: {}", tempFilePath, e.getMessage());
             }
         }
     }
@@ -2361,7 +2365,7 @@ public class GhRelAssetWagon extends StreamWagon {
                 uploadMetadataFile(groupId, artifactId, metadata);
             }
         } catch (Exception e) {
-            System.err.println("Failed to update Maven metadata for " + resourceName + ": " + e.getMessage());
+            logger.error("Failed to update Maven metadata for {}: {}", resourceName, e.getMessage());
         }
     }
 
