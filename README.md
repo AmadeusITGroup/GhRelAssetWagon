@@ -303,6 +303,16 @@ mvn clean install
 
 ## Advanced Configuration
 
+### Debug Logs
+If you wish to enable debug logs for this Wagon only, you can pass the following flag in your Maven command:
+```bash
+# before Maven 3.9.0
+-Dorg.slf4j.simpleLogger.log.io.github.amadeusitgroup.maven.wagon=debug
+
+# Maven 3.9.0 and later
+-Dmaven.logger.log.io.github.amadeusitgroup.maven.wagon=debug
+```
+
 ### Configuration Options
 
 The GhRelAssetWagon supports external configuration through the `ConfigurationManager`. Create a configuration file (e.g., `ghrelasset-config.json`) with the following options:

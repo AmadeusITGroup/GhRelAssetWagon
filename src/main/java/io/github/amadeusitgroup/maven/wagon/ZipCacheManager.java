@@ -117,7 +117,6 @@ public class ZipCacheManager {
             MessageDigest md = MessageDigest.getInstance("SHA-1");
             md.update(input.getBytes());
             byte[] digest = md.digest();
-            System.out.println("GhRelAssetWagon: SHA-1: " + DatatypeConverter.printHexBinary(digest));
             return DatatypeConverter.printHexBinary(digest);
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalArgumentException("SHA1 algorithm unavailable", e);
