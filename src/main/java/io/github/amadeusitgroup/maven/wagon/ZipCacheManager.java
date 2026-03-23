@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.nio.file.FileSystem;
+import java.nio.file.FileSystemAlreadyExistsException;
 import java.nio.file.FileSystems;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -15,8 +16,12 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.apache.commons.io.FileUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class ZipCacheManager {
+
+    private static final Logger logger = LoggerFactory.getLogger(ZipCacheManager.class);
 
     private final Path cacheDirectory;
 
@@ -82,12 +87,12 @@ public class ZipCacheManager {
      * @throws IOException           if an I/O error occurs.
      * @throws IllegalStateException if the cache has not been initialized.
      */
-    public FileSystem getZipFileSystem() throws IOException {
+    public synchronized FileSystem getZipFileSystem() throws IOException {
         if (!isInitialized()) {
             throw new IllegalStateException("ZipCacheManager has not been initialized");
         }
 
-        if (zipFileSystem == null) {
+        if (zipFileSystem == null || !zipFileSystem.isOpen()) {
             initialiseZipFileSystem(this.getCacheFile());
         }
 
@@ -95,13 +100,23 @@ public class ZipCacheManager {
     }
 
     /**
-     * Closes the zip {@link FileSystem} if it has been created.
+     * Closes the zip {@link FileSystem} if it has been created and is still open.
+     * Handles the case where the FileSystem may have already been closed by
+     * another wagon instance sharing the same underlying zip file.
      *
      * @throws IOException if an I/O error occurs closing the file system.
      */
-    public void close() throws IOException {
+    public synchronized void close() throws IOException {
         if (zipFileSystem != null) {
-            zipFileSystem.close();
+            try {
+                if (zipFileSystem.isOpen()) {
+                    zipFileSystem.close();
+                }
+            } catch (Exception e) {
+                logger.warn("Failed to close zip FileSystem (may have been closed by another wagon instance): {}", e.getMessage());
+            } finally {
+                zipFileSystem = null;
+            }
         }
     }
 
@@ -135,7 +150,13 @@ public class ZipCacheManager {
             Map<String, String> env = new HashMap<>();
             env.put("create", "true");
             URI uri = URI.create("jar:" + zipRepo.toURI());
-            this.zipFileSystem = FileSystems.newFileSystem(uri, env);
+            try {
+                this.zipFileSystem = FileSystems.newFileSystem(uri, env);
+            } catch (FileSystemAlreadyExistsException e) {
+                // Another wagon instance in the same JVM already opened this zip;
+                // reuse the existing FileSystem instead of failing.
+                this.zipFileSystem = FileSystems.getFileSystem(uri);
+            }
         }
     }
 }
