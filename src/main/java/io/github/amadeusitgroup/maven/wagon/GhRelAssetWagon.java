@@ -902,6 +902,8 @@ public class GhRelAssetWagon extends StreamWagon {
             File zipRepo = zipCacheManager.getCacheFile();
             logger.debug("get - repo: {}", zipRepo);
             getResourceFromZip(zipRepo.toString(), resource, destination);
+        } catch (ResourceDoesNotExistException e) {
+            throw e;
         } catch (Exception e) {
             throw new TransferFailedException("Failed to get resource: " + resourceName, e);
         }

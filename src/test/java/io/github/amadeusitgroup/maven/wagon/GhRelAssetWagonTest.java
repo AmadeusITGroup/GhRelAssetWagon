@@ -4,6 +4,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayName;
+import org.apache.maven.wagon.ResourceDoesNotExistException;
+import org.apache.maven.wagon.TransferFailedException;
 import org.apache.maven.wagon.authentication.AuthenticationInfo;
 import org.apache.maven.wagon.repository.Repository;
 import java.io.File;
@@ -819,6 +821,37 @@ public class GhRelAssetWagonTest {
 
         // Clean up
         checksumFile.delete();
+    }
+
+    @Test
+    @DisplayName("Should throw ResourceDoesNotExistException when getting a missing resource")
+    void testGetMissingResourceThrowsResourceDoesNotExistException() throws Exception {
+        // During deploy, Maven calls get() for maven-metadata.xml which may not exist yet.
+        // The wagon must throw ResourceDoesNotExistException (not TransferFailedException)
+        // so Maven knows the resource simply doesn't exist and creates fresh metadata.
+
+        Path zipPath = tempDir.resolve("test.zip");
+        try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(zipPath))) {
+            ZipEntry entry = new ZipEntry("some/existing/file.txt");
+            zos.putNextEntry(entry);
+            zos.write("content".getBytes());
+            zos.closeEntry();
+        }
+
+        ZipCacheManager zipCacheManager = new ZipCacheManager(tempDir);
+        try (InputStream is = Files.newInputStream(zipPath)) {
+            zipCacheManager.initialize(new GhRelAssetRepository(repository), is);
+        }
+        ghRelAssetWagon.setZipCacheManager(zipCacheManager);
+
+        File destination = tempDir.resolve("output.xml").toFile();
+
+        // Must throw ResourceDoesNotExistException, NOT TransferFailedException
+        assertThrows(ResourceDoesNotExistException.class, () ->
+            ghRelAssetWagon.get("com/example/artifact/maven-metadata.xml", destination)
+        );
+
+        zipCacheManager.close();
     }
 
     @Test
