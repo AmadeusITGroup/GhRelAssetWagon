@@ -822,6 +822,53 @@ public class GhRelAssetWagonTest {
     }
 
     @Test
+    @DisplayName("Should generate checksum sidecar files for maven-metadata.xml")
+    void testMetadataChecksumSidecarFilesGenerated() throws Exception {
+        // Setup WireMock stubs
+        setupBasicWireMockStubs();
+
+        // Create a zip with an initial entry so the cache is initialized
+        Path zipPath = tempDir.resolve("test.zip");
+        try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(zipPath))) {
+            ZipEntry entry = new ZipEntry("placeholder/");
+            zos.putNextEntry(entry);
+            zos.closeEntry();
+        }
+
+        // Initialize the zip cache manager with the test zip
+        ZipCacheManager zipCacheManager = new ZipCacheManager(tempDir);
+        try (InputStream is = Files.newInputStream(zipPath)) {
+            zipCacheManager.initialize(new GhRelAssetRepository(repository), is);
+        }
+        ghRelAssetWagon.setZipCacheManager(zipCacheManager);
+
+        // Create test JAR file
+        File jarFile = File.createTempFile("test-artifact", ".jar");
+        try (FileOutputStream fos = new FileOutputStream(jarFile)) {
+            fos.write("Test JAR content".getBytes());
+        }
+
+        when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+
+        // Connect and put artifact — this triggers metadata + checksum generation
+        ghRelAssetWagon.connect(repository, authenticationInfo);
+        ghRelAssetWagon.put(jarFile, "com/example/test-artifact/1.0.0/test-artifact-1.0.0.jar");
+
+        // Verify that maven-metadata.xml AND its checksum sidecar files exist in the zip
+        String metadataPath = "com/example/test-artifact/maven-metadata.xml";
+        assertTrue(ghRelAssetWagon.resourceExists(metadataPath),
+                "maven-metadata.xml should exist in the zip");
+        assertTrue(ghRelAssetWagon.resourceExists(metadataPath + ".sha1"),
+                "maven-metadata.xml.sha1 should exist in the zip");
+        assertTrue(ghRelAssetWagon.resourceExists(metadataPath + ".md5"),
+                "maven-metadata.xml.md5 should exist in the zip");
+
+        // Clean up
+        jarFile.delete();
+        zipCacheManager.close();
+    }
+
+    @Test
     @DisplayName("Should generate Maven metadata for POM files")
     void testPutPomGeneratesMetadata() throws Exception {
         // Setup WireMock stubs
