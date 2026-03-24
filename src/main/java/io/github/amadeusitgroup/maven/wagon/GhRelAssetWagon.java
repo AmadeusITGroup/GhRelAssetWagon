@@ -48,14 +48,14 @@ import org.slf4j.LoggerFactory;
 /**
  * The GhRelAssetWagon class is a custom implementation of the StreamWagon
  * class for Maven repository operations using GitHub Releases as storage.
- * 
+ *
  * This implementation provides:
  * - Streaming downloads and uploads for efficient memory usage
  * - Comprehensive event system integration for progress reporting
  * - Maven repository standards compliance (metadata, checksums)
  * - Performance optimizations (connection pooling, rate limiting, retry logic)
  * - Advanced features (parallel operations, delta sync, compression)
- * 
+ *
  * The wagon supports operations such as retrieving release IDs, asset IDs,
  * downloading release assets, uploading artifacts with checksums and metadata,
  * and managing GitHub releases and tags.
@@ -99,9 +99,9 @@ public class GhRelAssetWagon extends StreamWagon {
      */
     private boolean isTestEnvironment() {
         // Check if we're running in a test environment
-        return System.getProperty("maven.test.skip") != null || 
+        return System.getProperty("maven.test.skip") != null ||
                Thread.currentThread().getStackTrace()[0].getClassName().contains("Test") ||
-               getRepository() != null && getRepository().getUrl() != null && 
+               getRepository() != null && getRepository().getUrl() != null &&
                (getRepository().getUrl().contains("test-owner") || getRepository().getUrl().contains("owner/repo"));
     }
 
@@ -235,7 +235,7 @@ public class GhRelAssetWagon extends StreamWagon {
                 String token = this.authenticationInfo != null ? this.authenticationInfo.getPassword() : null;
                 HttpURLConnection connection = connectionPoolManager.getConnection(url.toString(), token);
                 rateLimitHandler.checkRateLimit();
-                
+
                 connection.setRequestMethod(method);
                 connection.setConnectTimeout(this.connectionTimeout);
                 connection.setReadTimeout(this.readTimeout);
@@ -244,7 +244,7 @@ public class GhRelAssetWagon extends StreamWagon {
                     connection.setRequestProperty("Authorization", "Bearer " + this.authenticationInfo.getPassword());
                 }
                 connection.setRequestProperty("X-GitHub-Api-Version", "2022-11-28");
-                
+
                 circuitBreakerHandler.onSuccess();
                 return connection;
             } catch (Exception e) {
@@ -265,17 +265,17 @@ public class GhRelAssetWagon extends StreamWagon {
         try {
             // connection.connect() called implicitly if not already
             int responseCode = connection.getResponseCode();
-            
+
             // Update rate limit information from response headers
             rateLimitHandler.updateRateLimit(connection);
-            
+
             // Record success for circuit breaker
             if (responseCode < 400) {
                 circuitBreakerHandler.onSuccess();
             } else {
                 circuitBreakerHandler.onFailure();
             }
-            
+
             return responseCode;
         } catch (IOException e) {
             circuitBreakerHandler.onFailure();
@@ -370,7 +370,7 @@ public class GhRelAssetWagon extends StreamWagon {
                 throw new IOException("Interrupted while creating connection", e);
             }
             int responseCode = executeEnhancedRequest(connection);
-            
+
             if (responseCode == HttpURLConnection.HTTP_OK) {
                 InputStream inputStream = connection.getInputStream();
 
@@ -789,7 +789,7 @@ public class GhRelAssetWagon extends StreamWagon {
             connection.setRequestProperty("Content-Type", "application/octet-stream");
             connection.setDoOutput(true);
             connection.setFixedLengthStreamingMode(file.length());
-            
+
             try (InputStream fileStream = new FileInputStream(file)) {
                 try (OutputStream outStream = connection.getOutputStream()) {
                     fileStream.transferTo(outStream);
@@ -927,7 +927,7 @@ public class GhRelAssetWagon extends StreamWagon {
     public boolean getIfNewer(String resourceName, File destination, long timestamp)
             throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
         logger.debug("getIfNewer {} to {} timestamp {}", resourceName, destination, timestamp);
-        
+
         try {
             // Parse repository and tag from URL
             String repoUrl = this.getRepository().getUrl();
@@ -939,11 +939,11 @@ public class GhRelAssetWagon extends StreamWagon {
             if (urlParts.length < 3) {
                 throw new TransferFailedException("Invalid repository URL format");
             }
-            
+
             String repository = urlParts[0] + "/" + urlParts[1];
             String tag = urlParts[2];
             String assetName = resourceName.substring(resourceName.lastIndexOf("/") + 1);
-            
+
             // Get release information to check asset timestamp
             String releaseId;
             try {
@@ -955,7 +955,7 @@ public class GhRelAssetWagon extends StreamWagon {
             if (releaseId == null) {
                 return false; // Release doesn't exist
             }
-            
+
             // Get asset information including timestamp
             URL url = new URL(apiEndpoint + "/repos/" + repository + "/releases/" + releaseId + "/assets");
             HttpURLConnection connection;
@@ -970,17 +970,17 @@ public class GhRelAssetWagon extends StreamWagon {
                 InputStream inputStream = connection.getInputStream();
                 ObjectMapper objectMapper = new ObjectMapper();
                 JsonNode rootNode = objectMapper.readTree(inputStream.readAllBytes());
-                
+
                 for (JsonNode assetNode : rootNode) {
                     JsonNode nameNode = assetNode.path("name");
                     if (nameNode.asText().equals(assetName)) {
                         JsonNode updatedAtNode = assetNode.path("updated_at");
                         String updatedAtStr = updatedAtNode.asText();
-                        
+
                         try {
                             Instant assetTimestamp = Instant.parse(updatedAtStr);
                             long assetTimestampMillis = assetTimestamp.toEpochMilli();
-                            
+
                             if (assetTimestampMillis > timestamp) {
                                 // Asset is newer, download it
                                 get(resourceName, destination);
@@ -998,9 +998,9 @@ public class GhRelAssetWagon extends StreamWagon {
                     }
                 }
             }
-            
+
             return false; // Asset not found
-            
+
         } catch (IOException e) {
             throw new TransferFailedException("Failed to check resource timestamp: " + e.getMessage(), e);
         } catch (Exception e) {
@@ -1011,29 +1011,29 @@ public class GhRelAssetWagon extends StreamWagon {
 
     /**
      * Generates and stages checksum files for an artifact.
-     * 
+     *
      * @param source The source file to generate checksums for
      * @param destination The destination path in the repository
      * @throws IOException If checksum generation fails
      */
     private void generateAndStageChecksums(File source, String destination) throws IOException {
         Map<String, String> checksums = checksumHandler.generateChecksums(source);
-        
+
         for (Map.Entry<String, String> entry : checksums.entrySet()) {
             String algorithm = entry.getKey();
             String checksum = entry.getValue();
             String extension = checksumHandler.getChecksumFileExtension(algorithm);
-            
+
             // Create temporary checksum file
             File checksumFile = File.createTempFile("checksum-" + algorithm, "." + extension);
             try (FileOutputStream fos = new FileOutputStream(checksumFile)) {
                 fos.write(checksum.getBytes());
             }
-            
+
             // Stage the checksum file
             String checksumDestination = destination + "." + extension;
             stageArtifact(checksumFile, checksumDestination);
-            
+
             // Clean up temporary file
             checksumFile.delete();
         }
@@ -1041,7 +1041,7 @@ public class GhRelAssetWagon extends StreamWagon {
 
     /**
      * Stages an artifact for upload by adding it to the local ZIP cache.
-     * 
+     *
      * @param source The source file to stage
      * @param destination The destination path in the repository
      * @throws IOException If staging fails
@@ -1064,7 +1064,7 @@ public class GhRelAssetWagon extends StreamWagon {
 
     /**
      * Updates the repository structure tracking for metadata generation.
-     * 
+     *
      * @param destination The artifact destination path
      */
     private void updateRepositoryStructure(String destination) {
@@ -1074,7 +1074,7 @@ public class GhRelAssetWagon extends StreamWagon {
         if (pathParts.length >= 3) {
             String version = pathParts[pathParts.length - 2];
             String artifactId = pathParts[pathParts.length - 3];
-            
+
             // Build group ID from remaining path parts
             StringBuilder groupIdBuilder = new StringBuilder();
             for (int i = 0; i < pathParts.length - 3; i++) {
@@ -1082,11 +1082,11 @@ public class GhRelAssetWagon extends StreamWagon {
                 groupIdBuilder.append(pathParts[i]);
             }
             String groupId = groupIdBuilder.toString();
-            
+
             // Track the structure
             String groupKey = "group:" + groupId;
             String artifactKey = "artifact:" + groupId + ":" + artifactId;
-            
+
             repositoryStructure.computeIfAbsent(groupKey, k -> new HashSet<>()).add(artifactId);
             repositoryStructure.computeIfAbsent(artifactKey, k -> new HashSet<>()).add(version);
         }
@@ -1094,7 +1094,7 @@ public class GhRelAssetWagon extends StreamWagon {
 
     /**
      * Determines if a destination path represents a main artifact (not a classifier).
-     * 
+     *
      * @param destination The destination path
      * @return true if this is a main artifact, false otherwise
      */
@@ -1104,7 +1104,7 @@ public class GhRelAssetWagon extends StreamWagon {
 
     /**
      * Generates Maven metadata files for the given artifact destination.
-     * 
+     *
      * @param destination The artifact destination path
      * @throws IOException If metadata generation fails
      */
@@ -1116,26 +1116,26 @@ public class GhRelAssetWagon extends StreamWagon {
             logger.debug("Skipping metadata generation for non-Maven path: {}", destination);
             return;
         }
-        
+
         // Extract coordinates using the validator
         RepositoryValidator.MavenCoordinates coordinates = RepositoryValidator.extractCoordinates(destination);
         if (coordinates == null) {
             logger.debug("Could not extract coordinates from path: {}", destination);
             return;
         }
-        
+
         String groupId = coordinates.getGroupId();
         String artifactId = coordinates.getArtifactId();
         String version = coordinates.getVersion();
-        
+
         // Generate artifact-level metadata
         generateArtifactLevelMetadata(groupId, artifactId);
-        
+
         // Generate group-level metadata if this is a plugin
         if (isPluginArtifact(destination)) {
             generateGroupLevelMetadata(groupId, artifactId);
         }
-        
+
         // Generate version-level metadata for SNAPSHOT versions
         if (version.endsWith("-SNAPSHOT")) {
             generateVersionLevelMetadata(groupId, artifactId, version);
@@ -1144,7 +1144,7 @@ public class GhRelAssetWagon extends StreamWagon {
 
     /**
      * Generates artifact-level Maven metadata.
-     * 
+     *
      * @param groupId The group ID
      * @param artifactId The artifact ID
      * @throws IOException If metadata generation fails
@@ -1152,26 +1152,27 @@ public class GhRelAssetWagon extends StreamWagon {
     private void generateArtifactLevelMetadata(String groupId, String artifactId) throws IOException {
         String artifactKey = "artifact:" + groupId + ":" + artifactId;
         Set<String> versions = repositoryStructure.get(artifactKey);
-        
+
         if (versions != null && !versions.isEmpty()) {
             String metadataXml = metadataHandler.generateArtifactMetadata(groupId, artifactId, new ArrayList<>(versions));
-            
+
             // Stage the metadata file
             String metadataPath = groupId.replace(".", "/") + "/" + artifactId + "/maven-metadata.xml";
             File tempMetadataFile = File.createTempFile("maven-metadata", ".xml");
-            
+
             try (FileOutputStream fos = new FileOutputStream(tempMetadataFile)) {
                 fos.write(metadataXml.getBytes());
             }
-            
+
             stageArtifact(tempMetadataFile, metadataPath);
+            generateAndStageChecksums(tempMetadataFile, metadataPath);
             tempMetadataFile.delete();
         }
     }
 
     /**
      * Generates group-level Maven metadata for plugins.
-     * 
+     *
      * @param groupId The group ID
      * @param artifactId The artifact ID
      * @throws IOException If metadata generation fails
@@ -1179,27 +1180,27 @@ public class GhRelAssetWagon extends StreamWagon {
     private void generateGroupLevelMetadata(String groupId, String artifactId) throws IOException {
         // For simplicity, assume plugin prefix is the artifactId without "-maven-plugin" suffix
         String prefix = artifactId.replace("-maven-plugin", "").replace("maven-", "");
-        
+
         List<MavenMetadataHandler.PluginInfo> plugins = new ArrayList<>();
         plugins.add(new MavenMetadataHandler.PluginInfo(artifactId, prefix, artifactId));
-        
+
         String metadataXml = metadataHandler.generateGroupMetadata(groupId, plugins);
-        
+
         // Stage the group-level metadata file
         String metadataPath = groupId.replace(".", "/") + "/maven-metadata.xml";
         File tempMetadataFile = File.createTempFile("maven-metadata-group", ".xml");
-        
+
         try (FileOutputStream fos = new FileOutputStream(tempMetadataFile)) {
             fos.write(metadataXml.getBytes());
         }
-        
+
         stageArtifact(tempMetadataFile, metadataPath);
+        generateAndStageChecksums(tempMetadataFile, metadataPath);
         tempMetadataFile.delete();
     }
 
     /**
-     * Generates version-level Maven metadata for SNAPSHOT versions.
-     * 
+     *
      * @param groupId The group ID
      * @param artifactId The artifact ID
      * @param version The SNAPSHOT version
@@ -1209,7 +1210,7 @@ public class GhRelAssetWagon extends StreamWagon {
         // Generate snapshot version info
         String timestamp = new java.text.SimpleDateFormat("yyyyMMdd.HHmmss").format(new java.util.Date());
         int buildNumber = 1; // In a real implementation, this would be incremented
-        
+
         List<MavenMetadataHandler.SnapshotVersionInfo> snapshotVersions = new ArrayList<>();
         snapshotVersions.add(new MavenMetadataHandler.SnapshotVersionInfo(
             null, "jar", version.replace("-SNAPSHOT", "-" + timestamp + "-" + buildNumber),
@@ -1217,24 +1218,25 @@ public class GhRelAssetWagon extends StreamWagon {
         snapshotVersions.add(new MavenMetadataHandler.SnapshotVersionInfo(
             null, "pom", version.replace("-SNAPSHOT", "-" + timestamp + "-" + buildNumber),
             timestamp.replace(".", ""), timestamp, buildNumber));
-        
+
         String metadataXml = metadataHandler.generateVersionMetadata(groupId, artifactId, version, snapshotVersions);
-        
+
         // Stage the version-level metadata file
         String metadataPath = groupId.replace(".", "/") + "/" + artifactId + "/" + version + "/maven-metadata.xml";
         File tempMetadataFile = File.createTempFile("maven-metadata-version", ".xml");
-        
+
         try (FileOutputStream fos = new FileOutputStream(tempMetadataFile)) {
             fos.write(metadataXml.getBytes());
         }
-        
+
         stageArtifact(tempMetadataFile, metadataPath);
+        generateAndStageChecksums(tempMetadataFile, metadataPath);
         tempMetadataFile.delete();
     }
 
     /**
      * Determines if an artifact is a Maven plugin based on its path.
-     * 
+     *
      * @param destination The artifact destination path
      * @return true if this appears to be a plugin artifact
      */
@@ -1302,7 +1304,7 @@ public class GhRelAssetWagon extends StreamWagon {
      * Closes the connection and performs any necessary cleanup operations.
      * If there are artifacts to upload, it uploads them to the repository.
      * If the repository URL ends with ".zip", it also uploads the zip file.
-     * 
+     *
      * @throws ConnectionException if there is an error closing the connection.
      */
     @Override
@@ -1315,10 +1317,10 @@ public class GhRelAssetWagon extends StreamWagon {
             if (isTestEnvironment()) {
                 return;
             }
-            
+
             // Process all queued uploads from StreamWagon operations
             processQueuedUploads();
-            
+
             // Handle legacy artifacts to upload
             if (this.artifactsToUpload != null && !this.artifactsToUpload.isEmpty()) {
                 logger.debug("Closing connection - uploading legacy artifacts");
@@ -1463,22 +1465,22 @@ public class GhRelAssetWagon extends StreamWagon {
      */
     public Map<String, Object> getPerformanceStatistics() {
         Map<String, Object> stats = new HashMap<>();
-        
+
         // Connection pool statistics
         stats.put("connectionPool", "Connection pooling active");
-        
+
         // Rate limit statistics
         stats.put("rateLimit", "Rate limiting active");
-        
+
         // Retry statistics
         stats.put("retry", "Retry mechanism active");
-        
+
         // Circuit breaker statistics
         stats.put("circuitBreaker", "Circuit breaker active");
-        
+
         // Async operation statistics
         stats.put("asyncOperations", "Async operations active");
-        
+
         return stats;
     }
 
@@ -1513,9 +1515,9 @@ public class GhRelAssetWagon extends StreamWagon {
     public List<String> getFileList(String destinationDirectory)
             throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
         logger.debug("getFileList for directory: {}", destinationDirectory);
-        
+
         List<String> fileList = new ArrayList<>();
-        
+
         try {
             // Parse repository and tag from URL
             String repoUrl = this.getRepository().getUrl();
@@ -1527,10 +1529,10 @@ public class GhRelAssetWagon extends StreamWagon {
             if (urlParts.length < 3) {
                 throw new TransferFailedException("Invalid repository URL format");
             }
-            
+
             String repository = urlParts[0] + "/" + urlParts[1];
             String tag = urlParts[2];
-            
+
             // Get release information
             String releaseId;
             try {
@@ -1543,7 +1545,7 @@ public class GhRelAssetWagon extends StreamWagon {
                 logger.debug("Release not found for tag: {}", tag);
                 return fileList; // Return empty list if release doesn't exist
             }
-            
+
             // Get assets from the release
             URL url = new URL(apiEndpoint + "/repos/" + repository + "/releases/" + releaseId + "/assets");
             HttpURLConnection connection;
@@ -1558,12 +1560,12 @@ public class GhRelAssetWagon extends StreamWagon {
                 InputStream inputStream = connection.getInputStream();
                 ObjectMapper objectMapper = new ObjectMapper();
                 JsonNode rootNode = objectMapper.readTree(inputStream.readAllBytes());
-                
+
                 // Extract file names from assets
                 for (JsonNode assetNode : rootNode) {
                     JsonNode nameNode = assetNode.path("name");
                     String assetName = nameNode.asText();
-                    
+
                     // For GitHub releases, we treat all assets as being in the same "directory"
                     // In a more sophisticated implementation, we could parse asset names for directory structure
                     if (assetName != null && !assetName.isEmpty()) {
@@ -1578,13 +1580,13 @@ public class GhRelAssetWagon extends StreamWagon {
             } else {
                 throw new TransferFailedException("Failed to retrieve file list. HTTP response code: " + responseCode);
             }
-            
+
         } catch (IOException e) {
             throw new TransferFailedException("Failed to retrieve file list: " + e.getMessage(), e);
         } catch (Exception e) {
             throw new TransferFailedException("Unexpected error during getFileList: " + e.getMessage(), e);
         }
-        
+
         return fileList;
     }
 
@@ -1602,7 +1604,7 @@ public class GhRelAssetWagon extends StreamWagon {
     public boolean resourceExists(String resourceName)
             throws TransferFailedException, AuthorizationException {
         logger.debug("Checking if resource exists: {}", resourceName);
-        
+
         if (!zipCacheManager.isInitialized()) {
             return false;
         }
@@ -1632,33 +1634,33 @@ public class GhRelAssetWagon extends StreamWagon {
     public void putDirectory(File sourceDirectory, String destinationDirectory)
             throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
         logger.debug("putDirectory from {} to {}", sourceDirectory, destinationDirectory);
-        
+
         // Track metrics for directory upload
         long startTime = System.currentTimeMillis();
         metricsCollector.incrementCounter("directory.uploads.attempted");
-        
+
         if (!sourceDirectory.exists()) {
             throw new ResourceDoesNotExistException("Source directory does not exist: " + sourceDirectory);
         }
-        
+
         if (!sourceDirectory.isDirectory()) {
             throw new TransferFailedException("Source is not a directory: " + sourceDirectory);
         }
-        
+
         try {
             // Load configuration settings
             boolean parallelEnabled = configurationManager.getBoolean("parallel.operations.enabled", false);
             boolean deltaSyncEnabled = configurationManager.getBoolean("delta.sync.enabled", false);
             boolean compressionEnabled = configurationManager.getBoolean("compression.enabled", false);
-            
+
             // Collect all files to upload
             List<File> allFiles = new ArrayList<>();
             List<String> allDestinations = new ArrayList<>();
             collectFilesRecursively(sourceDirectory, destinationDirectory, "", allFiles, allDestinations);
-            
+
             logger.debug("Found {} files to upload", allFiles.size());
             metricsCollector.setGauge("directory.uploads.file.count", allFiles.size());
-            
+
             // Apply delta sync if enabled
             if (deltaSyncEnabled) {
                 try {
@@ -1671,17 +1673,17 @@ public class GhRelAssetWagon extends StreamWagon {
                                 public void syncFile(File file, DeltaSyncManager.SyncOperation operation) {
                                     logger.debug("Delta sync: {} for {}", operation, file.getName());
                                 }
-                                
+
                                 @Override
                                 public void deleteFile(String path) {
                                     logger.debug("Delta sync: DELETE for {}", path);
                                 }
                             });
-                        
+
                         // Filter files based on delta sync results
                         List<File> filesToUpload = new ArrayList<>();
                         List<String> destinationsToUpload = new ArrayList<>();
-                        
+
                         for (int i = 0; i < allFiles.size(); i++) {
                             File file = allFiles.get(i);
                             if (syncResult.getAddedFiles().contains(file) || syncResult.getModifiedFiles().contains(file)) {
@@ -1689,10 +1691,10 @@ public class GhRelAssetWagon extends StreamWagon {
                                 destinationsToUpload.add(allDestinations.get(i));
                             }
                         }
-                        
+
                         allFiles = filesToUpload;
                         allDestinations = destinationsToUpload;
-                        
+
                         logger.debug("Delta sync reduced upload to {} files", allFiles.size());
                         metricsCollector.incrementCounter("directory.uploads.delta.sync.applied");
                         metricsCollector.setGauge("directory.uploads.delta.reduced.count", allFiles.size());
@@ -1702,14 +1704,14 @@ public class GhRelAssetWagon extends StreamWagon {
                     metricsCollector.incrementCounter("directory.uploads.delta.sync.failed");
                 }
             }
-            
+
             // Upload files (parallel if enabled)
             if (parallelEnabled && allFiles.size() > 1) {
                 try {
                     // Execute parallel uploads using ParallelOperationManager
                     final List<File> finalFiles = allFiles;
                     final List<String> finalDestinations = allDestinations;
-                    CompletableFuture<List<ParallelOperationManager.UploadResult>> uploadFuture = 
+                    CompletableFuture<List<ParallelOperationManager.UploadResult>> uploadFuture =
                         parallelOperationManager.uploadFilesParallel(finalFiles, new ParallelOperationManager.UploadHandler() {
                             @Override
                             public void upload(File file) {
@@ -1721,11 +1723,11 @@ public class GhRelAssetWagon extends StreamWagon {
                                 }
                             }
                         });
-                    
+
                     List<ParallelOperationManager.UploadResult> results = uploadFuture.get();
                     logger.debug("Parallel directory upload completed with {} files", results.size());
                     metricsCollector.incrementCounter("directory.uploads.parallel.executed");
-                    
+
                 } catch (Exception e) {
                     logger.warn("Warning - Parallel directory upload failed, falling back to sequential: {}", e.getMessage());
                     metricsCollector.incrementCounter("directory.uploads.parallel.fallback");
@@ -1736,34 +1738,34 @@ public class GhRelAssetWagon extends StreamWagon {
                 // Sequential upload
                 uploadFilesSequentially(allFiles, allDestinations);
             }
-            
+
             // Track successful directory upload
             metricsCollector.incrementCounter("directory.uploads.successful");
             MetricsCollector.Timer timer = metricsCollector.startTimer("directory.uploads.duration");
             // Simulate the duration by creating a timer that represents the elapsed time
             Thread.sleep(1); // Minimal sleep to ensure timer has some duration
             timer.stop();
-            
+
         } catch (Exception e) {
             metricsCollector.incrementCounter("directory.uploads.failed");
             throw new TransferFailedException("Failed to upload directory: " + e.getMessage(), e);
         }
     }
-    
+
     /**
      * Collects all files recursively from a directory.
      */
-    private void collectFilesRecursively(File currentDir, String destinationDirectory, String relativePath, 
+    private void collectFilesRecursively(File currentDir, String destinationDirectory, String relativePath,
                                        List<File> allFiles, List<String> allDestinations) {
         File[] files = currentDir.listFiles();
         if (files == null) {
             return;
         }
-        
+
         for (File file : files) {
             String currentRelativePath = relativePath.isEmpty() ? file.getName() : relativePath + "/" + file.getName();
             String destinationPath = destinationDirectory + currentRelativePath;
-            
+
             if (file.isDirectory()) {
                 collectFilesRecursively(file, destinationDirectory, currentRelativePath, allFiles, allDestinations);
             } else {
@@ -1772,7 +1774,7 @@ public class GhRelAssetWagon extends StreamWagon {
             }
         }
     }
-    
+
     /**
      * Uploads files sequentially.
      */
@@ -1796,17 +1798,17 @@ public class GhRelAssetWagon extends StreamWagon {
     @Override
     public void put(File source, String destination) throws TransferFailedException {
         logger.debug("put {} to {}", source.getAbsolutePath(), destination);
-        
+
         // Track metrics for the upload operation
         long startTime = System.currentTimeMillis();
         metricsCollector.incrementCounter("uploads.attempted");
-        
+
         try {
             // Load configuration settings
             boolean compressionEnabled = configurationManager.getBoolean("compression.enabled", false);
             boolean deltaSyncEnabled = configurationManager.getBoolean("delta.sync.enabled", false);
             boolean parallelEnabled = configurationManager.getBoolean("parallel.operations.enabled", false);
-            
+
             // Validate repository path structure
             RepositoryValidator.ValidationResult validation = RepositoryValidator.validateRepositoryPath(destination);
             if (!validation.isValid()) {
@@ -1814,13 +1816,13 @@ public class GhRelAssetWagon extends StreamWagon {
                 metricsCollector.incrementCounter("uploads.validation.failed");
                 // Log warning but continue - some legacy paths might not be perfectly compliant
             }
-            
+
             // Check if this is a checksum file - don't generate checksums for checksum files
-            boolean isChecksumFile = destination.endsWith(".md5") || destination.endsWith(".sha1") || 
+            boolean isChecksumFile = destination.endsWith(".md5") || destination.endsWith(".sha1") ||
                                    destination.endsWith(".sha256") || destination.endsWith(".asc");
-            
+
             File fileToUpload = source;
-            
+
             // Apply compression if enabled and file is suitable for compression
             if (compressionEnabled && !isChecksumFile && shouldCompress(source)) {
                 try {
@@ -1835,7 +1837,7 @@ public class GhRelAssetWagon extends StreamWagon {
                     // Continue with original file
                 }
             }
-            
+
             // Check for delta sync if enabled
             if (deltaSyncEnabled && !isChecksumFile) {
                 try {
@@ -1849,13 +1851,13 @@ public class GhRelAssetWagon extends StreamWagon {
                                 public void syncFile(File file, DeltaSyncManager.SyncOperation operation) {
                                     logger.debug("Delta sync: {} for {}", operation, file.getName());
                                 }
-                                
+
                                 @Override
                                 public void deleteFile(String path) {
                                     logger.debug("Delta sync: DELETE for {}", path);
                                 }
                             });
-                        
+
                         if (syncResult.getAddedFiles().isEmpty() && syncResult.getModifiedFiles().isEmpty()) {
                             logger.debug("File unchanged, skipping upload via delta sync");
                             metricsCollector.incrementCounter("uploads.skipped.unchanged");
@@ -1869,7 +1871,7 @@ public class GhRelAssetWagon extends StreamWagon {
                     // Continue with normal upload
                 }
             }
-            
+
             if (!isChecksumFile) {
                 // Generate checksums for the source file
                 try {
@@ -1881,12 +1883,12 @@ public class GhRelAssetWagon extends StreamWagon {
                     metricsCollector.incrementCounter("uploads.checksums.failed");
                 }
             }
-            
+
             // Stage the main artifact (with parallel operations if enabled)
             if (parallelEnabled && !isChecksumFile) {
                 try {
                     // Use parallel operations for staging (single file upload)
-                    CompletableFuture<List<ParallelOperationManager.UploadResult>> uploadFuture = 
+                    CompletableFuture<List<ParallelOperationManager.UploadResult>> uploadFuture =
                         parallelOperationManager.uploadFilesParallel(List.of(fileToUpload), new ParallelOperationManager.UploadHandler() {
                             @Override
                             public void upload(File file) {
@@ -1907,10 +1909,10 @@ public class GhRelAssetWagon extends StreamWagon {
             } else {
                 stageArtifact(fileToUpload, destination);
             }
-            
+
             // Update repository structure tracking
             updateRepositoryStructure(destination);
-            
+
             // Generate Maven metadata if applicable (but not for checksum files)
             if (!isChecksumFile) {
                 try {
@@ -1922,19 +1924,19 @@ public class GhRelAssetWagon extends StreamWagon {
                     metricsCollector.incrementCounter("uploads.metadata.failed");
                 }
             }
-            
+
             // Clean up temporary compressed file if created
             if (fileToUpload != source && fileToUpload.exists()) {
                 fileToUpload.delete();
             }
-            
+
             // Track successful upload
             metricsCollector.incrementCounter("uploads.successful");
             MetricsCollector.Timer timer = metricsCollector.startTimer("uploads.duration");
             // Simulate the duration by creating a timer that represents the elapsed time
             Thread.sleep(1); // Minimal sleep to ensure timer has some duration
             timer.stop();
-            
+
         } catch (IOException e) {
             metricsCollector.incrementCounter("uploads.failed");
             throw new TransferFailedException("Failed to upload artifact: " + e.getMessage(), e);
@@ -1943,21 +1945,21 @@ public class GhRelAssetWagon extends StreamWagon {
             throw new TransferFailedException("Unexpected error during put: " + e.getMessage(), e);
         }
     }
-    
+
     /**
      * Determines if a file should be compressed based on its type and size.
-     * 
+     *
      * @param file The file to check
      * @return true if the file should be compressed
      */
     private boolean shouldCompress(File file) {
         // Don't compress already compressed files
         String name = file.getName().toLowerCase();
-        if (name.endsWith(".jar") || name.endsWith(".zip") || name.endsWith(".gz") || 
+        if (name.endsWith(".jar") || name.endsWith(".zip") || name.endsWith(".gz") ||
             name.endsWith(".tar.gz") || name.endsWith(".war") || name.endsWith(".ear")) {
             return false;
         }
-        
+
         // Compress text-based files and larger files
         long minSize = configurationManager.getLong("compression.min.size", 1024); // 1KB default
         return file.length() > minSize;
@@ -2010,57 +2012,57 @@ public class GhRelAssetWagon extends StreamWagon {
      * @throws AuthorizationException If not authorized to access the resource
      */
     @Override
-    public void fillInputData(InputData inputData) 
+    public void fillInputData(InputData inputData)
             throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
-        
+
         String resourceName = inputData.getResource().getName();
-        
+
         try {
             // Fire transfer events for progress reporting
             fireGetInitiated(inputData.getResource(), null);
             fireGetStarted(inputData.getResource(), null);
-            
+
             // For test scenarios, provide a mock input stream
             if (isTestEnvironment()) {
                 inputData.setInputStream(new java.io.ByteArrayInputStream("test-content".getBytes()));
                 inputData.getResource().setContentLength(12);
                 return;
             }
-            
+
             // Get the download URL for the GitHub release asset
             String downloadUrl = resolveAssetDownloadUrl(resourceName);
-            
+
             if (downloadUrl == null) {
                 throw new ResourceDoesNotExistException("Resource not found: " + resourceName);
             }
-            
+
             // Create connection with performance enhancements
             URL url = new URL(downloadUrl);
             HttpURLConnection connection = createEnhancedConnection(url, "GET");
-            
+
             // Set up authentication if available
             AuthenticationInfo authInfo = getAuthenticationInfo();
             if (authInfo != null && authInfo.getPassword() != null) {
                 String auth = "token " + authInfo.getPassword();
                 connection.setRequestProperty("Authorization", auth);
             }
-            
+
             // Configure connection and get input stream
             connection.connect();
-            
+
             if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
                 throw new TransferFailedException("Failed to download resource: HTTP " + connection.getResponseCode());
             }
-            
+
             // Set the input stream for StreamWagon to use
             inputData.setInputStream(connection.getInputStream());
-            
+
             // Set content length if available for progress reporting
             long contentLength = connection.getContentLengthLong();
             if (contentLength > 0) {
                 inputData.getResource().setContentLength(contentLength);
             }
-            
+
         } catch (IOException | InterruptedException e) {
             // Fire transfer error event
             fireTransferError(inputData.getResource(), e, TransferEvent.REQUEST_GET);
@@ -2077,7 +2079,7 @@ public class GhRelAssetWagon extends StreamWagon {
      */
     @Override
     public void fillOutputData(OutputData outputData) throws TransferFailedException {
-        
+
         String resourceName = outputData.getResource().getName();
 
         // For test scenarios, provide a mock output stream
@@ -2085,7 +2087,7 @@ public class GhRelAssetWagon extends StreamWagon {
             outputData.setOutputStream(new java.io.ByteArrayOutputStream());
             return;
         }
-        
+
         try {
             File zipRepo = zipCacheManager.getCacheFile();
 
@@ -2101,9 +2103,9 @@ public class GhRelAssetWagon extends StreamWagon {
                 Path entryPath = this.zipCacheManager.getZipFileSystem().getPath(resourceName);
                 outputData.setOutputStream(Files.newOutputStream(entryPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING));
             }
-            
+
             artifactsToUpload.add(resourceName);
-            
+
         } catch (IOException e) {
             // Fire transfer error event
             fireTransferError(outputData.getResource(), e, TransferEvent.REQUEST_PUT);
@@ -2138,14 +2140,14 @@ public class GhRelAssetWagon extends StreamWagon {
         if (!repoUrl.startsWith("ghrelasset://")) {
             throw new IllegalArgumentException("Invalid repository URL format. Expected: ghrelasset://owner/repo/tag");
         }
-        
+
         String path = repoUrl.substring("ghrelasset://".length());
         String[] parts = path.split("/");
-        
+
         if (parts.length < 3) {
             throw new IllegalArgumentException("Invalid repository URL format. Expected: ghrelasset://owner/repo/tag");
         }
-        
+
         return new String[]{parts[0], parts[1], parts[2]};
     }
 
@@ -2160,23 +2162,23 @@ public class GhRelAssetWagon extends StreamWagon {
      * @throws IOException If API communication fails
      * @throws InterruptedException If the operation is interrupted
      */
-    private String getAssetDownloadUrl(String owner, String repo, String tag, String assetName) 
+    private String getAssetDownloadUrl(String owner, String repo, String tag, String assetName)
             throws IOException, InterruptedException {
-        
+
         String releaseId = getReleaseId(owner + "/" + repo, tag);
         if (releaseId == null) {
             return null;
         }
-        
+
         // Get release assets
         String assetsUrl = "https://api.github.com/repos/" + owner + "/" + repo + "/releases/" + releaseId + "/assets";
         HttpURLConnection connection = createEnhancedConnection(new URL(assetsUrl), "GET");
-        
+
         try {
             if (connection.getResponseCode() == HttpURLConnection.HTTP_OK) {
                 String response = readResponse(connection);
                 JsonNode assets = objectMapper.readTree(response);
-                
+
                 for (JsonNode asset : assets) {
                     if (assetName.equals(asset.get("name").asText())) {
                         return asset.get("browser_download_url").asText();
@@ -2186,7 +2188,7 @@ public class GhRelAssetWagon extends StreamWagon {
         } finally {
             connection.disconnect();
         }
-        
+
         return null;
     }
 
@@ -2200,7 +2202,7 @@ public class GhRelAssetWagon extends StreamWagon {
         for (Map.Entry<String, String> entry : uploadedArtifacts.entrySet()) {
             String resourceName = entry.getKey();
             String tempFilePath = entry.getValue();
-            
+
             try {
                 uploadFileToGitHub(new File(tempFilePath), resourceName);
             } catch (Exception e) {
@@ -2242,13 +2244,13 @@ public class GhRelAssetWagon extends StreamWagon {
         String owner = parts[0];
         String repo = parts[1];
         String tag = parts[2];
-        
+
         // Get release information
         String releaseId = getReleaseId(owner + "/" + repo, tag);
         if (releaseId == null) {
             return null;
         }
-        
+
         // Get asset download URL
         return getAssetDownloadUrl(owner, repo, tag, resourceName);
     }
@@ -2287,10 +2289,10 @@ public class GhRelAssetWagon extends StreamWagon {
         String owner = parts[0];
         String repo = parts[1];
         String tag = parts[2];
-        
+
         // Ensure release exists
         String releaseId = getOrCreateRelease(owner + "/" + repo, tag);
-        
+
         // Upload the asset
         uploadAsset(owner + "/" + repo, releaseId, resourceName, file);
     }
@@ -2306,7 +2308,7 @@ public class GhRelAssetWagon extends StreamWagon {
     private void generateAndUploadChecksums(File file, String resourceName) throws IOException, InterruptedException {
         // Generate checksums
         Map<String, String> checksums = checksumHandler.generateChecksums(file, "MD5", "SHA-1", "SHA-256");
-        
+
         // Upload checksum files
         if (checksums.containsKey("MD5")) {
             uploadChecksumFile(resourceName + ".md5", checksums.get("MD5"));
@@ -2333,7 +2335,7 @@ public class GhRelAssetWagon extends StreamWagon {
         try (FileOutputStream fos = new FileOutputStream(tempFile)) {
             fos.write(checksum.getBytes());
         }
-        
+
         try {
             uploadFileToGitHub(tempFile, fileName);
         } finally {
@@ -2354,12 +2356,12 @@ public class GhRelAssetWagon extends StreamWagon {
                 String groupId = coordinates.getGroupId();
                 String artifactId = coordinates.getArtifactId();
                 String version = coordinates.getVersion();
-                
+
                 // Track uploaded artifact
                 String key = groupId + ":" + artifactId;
                 Set<String> versions = repositoryStructure.computeIfAbsent(key, k -> new HashSet<>());
                 versions.add(version);
-                
+
                 // Generate and upload metadata
                 String metadata = metadataHandler.generateArtifactMetadata(groupId, artifactId, new ArrayList<>(versions));
                 uploadMetadataFile(groupId, artifactId, metadata);
@@ -2384,7 +2386,7 @@ public class GhRelAssetWagon extends StreamWagon {
         try (FileOutputStream fos = new FileOutputStream(tempFile)) {
             fos.write(metadata.getBytes());
         }
-        
+
         try {
             String metadataPath = groupId.replace('.', '/') + "/" + artifactId + "/maven-metadata.xml";
             uploadFileToGitHub(tempFile, metadataPath);

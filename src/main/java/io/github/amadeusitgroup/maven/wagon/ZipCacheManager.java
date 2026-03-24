@@ -149,12 +149,14 @@ public class ZipCacheManager {
         if (this.zipFileSystem == null || !this.zipFileSystem.isOpen()) {
             Map<String, String> env = new HashMap<>();
             env.put("create", "true");
-            URI uri = URI.create("jar:" + zipRepo.toURI());
             try {
-                this.zipFileSystem = FileSystems.newFileSystem(uri, env);
+                // Use Path-based overload to avoid "Provider 'jar' not found" errors
+                // caused by Maven's classloader isolation hiding the jdk.zipfs module.
+                this.zipFileSystem = FileSystems.newFileSystem(zipRepo.toPath(), env);
             } catch (FileSystemAlreadyExistsException e) {
                 // Another wagon instance in the same JVM already opened this zip;
                 // reuse the existing FileSystem instead of failing.
+                URI uri = URI.create("jar:" + zipRepo.toURI());
                 this.zipFileSystem = FileSystems.getFileSystem(uri);
             }
         }
