@@ -1174,7 +1174,6 @@ public class GhRelAssetWagon extends StreamWagon {
             }
 
             stageArtifact(tempMetadataFile, metadataPath);
-            generateAndStageChecksums(tempMetadataFile, metadataPath);
             tempMetadataFile.delete();
         }
     }
@@ -1204,7 +1203,6 @@ public class GhRelAssetWagon extends StreamWagon {
         }
 
         stageArtifact(tempMetadataFile, metadataPath);
-        generateAndStageChecksums(tempMetadataFile, metadataPath);
         tempMetadataFile.delete();
     }
 
@@ -1239,7 +1237,6 @@ public class GhRelAssetWagon extends StreamWagon {
         }
 
         stageArtifact(tempMetadataFile, metadataPath);
-        generateAndStageChecksums(tempMetadataFile, metadataPath);
         tempMetadataFile.delete();
     }
 
