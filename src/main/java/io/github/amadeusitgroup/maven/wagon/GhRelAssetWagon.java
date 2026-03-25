@@ -866,7 +866,13 @@ public class GhRelAssetWagon extends StreamWagon {
         Path entryPath = this.zipCacheManager.getZipFileSystem().getPath(resourceName);
 
         if (entryPath.getParent() != null) {
-            Files.createDirectories(entryPath.getParent());
+            try {
+                Files.createDirectories(entryPath.getParent());
+            } catch (FileAlreadyExistsException e) {
+                // The zip filesystem can throw this for directories that already
+                // exist as implicit entries from previously added files. The
+                // directory functionally exists so this is safe to ignore.
+            }
         }
 
         Files.write(entryPath,
