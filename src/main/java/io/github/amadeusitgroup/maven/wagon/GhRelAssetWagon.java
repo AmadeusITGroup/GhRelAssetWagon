@@ -842,37 +842,73 @@ public class GhRelAssetWagon extends StreamWagon {
      */
     void addResourceToZip(File zipFile, String resourcePath, String resourceName) throws IOException {
 
-        if (!zipFile.exists()) {
-            zipFile.getParentFile().mkdirs();
+        // Normalize entry name: zip spec requires forward slashes
+        final String entryName = resourceName.replace('\\', '/');
 
-            // create a new zip file
-            try (ZipOutputStream zipOutputStream = new ZipOutputStream(new FileOutputStream(zipFile.getAbsolutePath()))) {
-                // add the new resource to the new zip file
-                zipOutputStream.putNextEntry(new ZipEntry(resourceName));
-                try (InputStream inputStream = new FileInputStream(resourcePath)) {
-                    byte[] buffer = new byte[1024];
-                    int length;
-                    while ((length = inputStream.read(buffer)) > 0) {
-                        zipOutputStream.write(buffer, 0, length);
+        if (!zipFile.exists()) {
+            // First-time: create a brand-new zip with this single entry.
+            // We use java.util.zip (ZipOutputStream) exclusively — no NIO FileSystems
+            // provider lookup — so this works regardless of classloader isolation.
+            zipFile.getParentFile().mkdirs();
+            try (ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(zipFile))) {
+                zos.putNextEntry(new ZipEntry(entryName));
+                try (InputStream in = new FileInputStream(resourcePath)) {
+                    byte[] buf = new byte[8192];
+                    int len;
+                    while ((len = in.read(buf)) > 0) {
+                        zos.write(buf, 0, len);
                     }
                 }
-                zipOutputStream.closeEntry();
+                zos.closeEntry();
             }
             return;
         }
 
-        // zip already exists
-        // write file into zip, replacing any existing file at the same path
-        Path entryPath = this.zipCacheManager.getZipFileSystem().getPath(resourceName);
+        // Zip already exists: rewrite it into a temp file, copying all existing entries
+        // except the one being replaced, then append the new/updated entry.
+        File tempFile = File.createTempFile("ghrelasset-", ".zip", zipFile.getParentFile());
+        try {
+            try (java.util.zip.ZipInputStream zin =
+                         new java.util.zip.ZipInputStream(new FileInputStream(zipFile));
+                 ZipOutputStream zout = new ZipOutputStream(new FileOutputStream(tempFile))) {
 
-        if (entryPath.getParent() != null) {
-            Files.createDirectories(entryPath.getParent());
+                java.util.zip.ZipEntry existing;
+                while ((existing = zin.getNextEntry()) != null) {
+                    if (!existing.getName().equals(entryName)) {
+                        zout.putNextEntry(new ZipEntry(existing.getName()));
+                        byte[] buf = new byte[8192];
+                        int len;
+                        while ((len = zin.read(buf)) > 0) {
+                            zout.write(buf, 0, len);
+                        }
+                        zout.closeEntry();
+                    }
+                    zin.closeEntry();
+                }
+
+                // Add the new / replaced entry
+                zout.putNextEntry(new ZipEntry(entryName));
+                try (InputStream in = new FileInputStream(resourcePath)) {
+                    byte[] buf = new byte[8192];
+                    int len;
+                    while ((len = in.read(buf)) > 0) {
+                        zout.write(buf, 0, len);
+                    }
+                }
+                zout.closeEntry();
+            }
+
+            // Atomically swap temp file → real zip file
+            if (!zipFile.delete()) {
+                throw new IOException("Cannot delete old zip cache: " + zipFile.getAbsolutePath());
+            }
+            if (!tempFile.renameTo(zipFile)) {
+                throw new IOException("Cannot rename temp zip to: " + zipFile.getAbsolutePath());
+            }
+        } catch (IOException e) {
+            tempFile.delete();
+            throw e;
         }
-
-        Files.write(entryPath,
-            Files.readAllBytes(Paths.get(resourcePath)),
-            StandardOpenOption.CREATE,
-            StandardOpenOption.TRUNCATE_EXISTING);
     }
 
     /**
@@ -894,7 +930,7 @@ public class GhRelAssetWagon extends StreamWagon {
         Resource resource = new Resource(resourceName);
         fireGetInitiated(resource, destination);
 
-        if (!zipCacheManager.isInitialized()) {
+        if (!zipCacheManager.isInitialized() || !zipCacheManager.getCacheFile().exists()) {
             throw new ResourceDoesNotExistException("Local zip cache is not initialized");
         }
 
@@ -1612,10 +1648,16 @@ public class GhRelAssetWagon extends StreamWagon {
         }
 
         try {
-            boolean exists = Files.exists(this.zipCacheManager.getZipFileSystem().getPath(resourceName));
-            logger.debug("Resource {} exists: {}", resourceName, exists);
-
-            return exists;
+            File cacheFile = zipCacheManager.getCacheFile();
+            if (cacheFile == null || !cacheFile.exists()) {
+                return false;
+            }
+            String normalizedName = resourceName.replace('\\', '/');
+            try (ZipFile zf = new ZipFile(cacheFile)) {
+                boolean exists = zf.getEntry(normalizedName) != null;
+                logger.debug("Resource {} exists: {}", resourceName, exists);
+                return exists;
+            }
         } catch (IOException e) {
             throw new TransferFailedException("Failed to check if resource exists: " + resourceName, e);
         }
@@ -2081,38 +2123,8 @@ public class GhRelAssetWagon extends StreamWagon {
      */
     @Override
     public void fillOutputData(OutputData outputData) throws TransferFailedException {
-
-        String resourceName = outputData.getResource().getName();
-
-        // For test scenarios, provide a mock output stream
-        if (isTestEnvironment()) {
-            outputData.setOutputStream(new java.io.ByteArrayOutputStream());
-            return;
-        }
-
-        try {
-            File zipRepo = zipCacheManager.getCacheFile();
-
-            // create output streams (maven will close them for us)
-            if (!zipRepo.exists()) {
-                ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(zipRepo));
-                ZipEntry entry = new ZipEntry(resourceName);
-                zos.putNextEntry(entry);
-                outputData.setOutputStream(zos);
-                return;
-            } else {
-                // zip already exists
-                Path entryPath = this.zipCacheManager.getZipFileSystem().getPath(resourceName);
-                outputData.setOutputStream(Files.newOutputStream(entryPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING));
-            }
-
-            artifactsToUpload.add(resourceName);
-
-        } catch (IOException e) {
-            // Fire transfer error event
-            fireTransferError(outputData.getResource(), e, TransferEvent.REQUEST_PUT);
-            throw new TransferFailedException("Failed to configure output stream for " + resourceName, e);
-        }
+        outputData.setOutputStream(new java.io.ByteArrayOutputStream());
+        artifactsToUpload.add(outputData.getResource().getName());
     }
 
     /**
