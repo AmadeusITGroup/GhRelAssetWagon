@@ -840,7 +840,7 @@ public class GhRelAssetWagon extends StreamWagon {
      * @throws IOException if an I/O error occurs while reading or writing the zip
      *                     file
      */
-    void addResourceToZip(File zipFile, String resourcePath, String resourceName) throws IOException {
+    synchronized void addResourceToZip(File zipFile, String resourcePath, String resourceName) throws IOException {
 
         if (!zipFile.exists()) {
             zipFile.getParentFile().mkdirs();

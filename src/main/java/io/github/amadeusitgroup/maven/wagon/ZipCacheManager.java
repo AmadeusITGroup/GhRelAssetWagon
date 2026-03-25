@@ -151,17 +151,7 @@ public class ZipCacheManager {
             env.put("create", "true");
             URI uri = URI.create("jar:" + zipRepo.toURI());
             try {
-                // Use the 3-arg overload with the system classloader. The 2-arg
-                // newFileSystem(URI, Map) only checks FileSystemProvider.installedProviders(),
-                // which relies on a static cache populated via ServiceLoader. Under Maven's
-                // classloader isolation the jdk.zipfs module may not be visible when that
-                // cache is first populated, causing an intermittent "Provider 'jar' not found"
-                // error. The 3-arg overload adds a fallback: if the installed-providers list
-                // doesn't contain the "jar" scheme, it performs a second ServiceLoader lookup
-                // using the supplied classloader, giving it a second chance to discover
-                // the ZipFileSystemProvider from the system classloader where jdk.zipfs
-                // is always accessible.
-                this.zipFileSystem = FileSystems.newFileSystem(uri, env, ClassLoader.getSystemClassLoader());
+                this.zipFileSystem = FileSystems.newFileSystem(uri, env);
             } catch (FileSystemAlreadyExistsException e) {
                 // Another wagon instance in the same JVM already opened this zip;
                 // reuse the existing FileSystem instead of failing.
