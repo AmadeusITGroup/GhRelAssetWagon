@@ -2103,6 +2103,9 @@ public class GhRelAssetWagon extends StreamWagon {
             } else {
                 // zip already exists
                 Path entryPath = this.zipCacheManager.getZipFileSystem().getPath(resourceName);
+                if (entryPath.getParent() != null) {
+                    Files.createDirectories(entryPath.getParent());
+                }
                 outputData.setOutputStream(Files.newOutputStream(entryPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING));
             }
 
