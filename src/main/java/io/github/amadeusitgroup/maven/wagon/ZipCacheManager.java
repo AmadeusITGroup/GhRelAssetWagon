@@ -150,12 +150,24 @@ public class ZipCacheManager {
             Map<String, String> env = new HashMap<>();
             env.put("create", "true");
             URI uri = URI.create("jar:" + zipRepo.toURI());
+
+            // Temporarily swap the thread context classloader to the system classloader.
+            // FileSystemProvider.installedProviders() uses ServiceLoader which discovers
+            // providers via the thread's context classloader. Under Maven's classloader
+            // isolation the context classloader may not see the jdk.zipfs module, causing
+            // an intermittent "Provider 'jar' not found" error depending on which thread
+            // first triggers the static provider cache initialization.
+            Thread currentThread = Thread.currentThread();
+            ClassLoader originalCL = currentThread.getContextClassLoader();
             try {
+                currentThread.setContextClassLoader(ClassLoader.getSystemClassLoader());
                 this.zipFileSystem = FileSystems.newFileSystem(uri, env);
             } catch (FileSystemAlreadyExistsException e) {
                 // Another wagon instance in the same JVM already opened this zip;
                 // reuse the existing FileSystem instead of failing.
                 this.zipFileSystem = FileSystems.getFileSystem(uri);
+            } finally {
+                currentThread.setContextClassLoader(originalCL);
             }
         }
     }
