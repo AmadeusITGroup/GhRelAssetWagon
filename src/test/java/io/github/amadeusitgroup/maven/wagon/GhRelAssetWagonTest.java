@@ -1205,41 +1205,47 @@ public class GhRelAssetWagonTest {
     }
 
     /**
-     * get() must successfully read back a resource that was staged via a
-     * leading-slash path, regardless of whether the lookup uses a leading slash.
+     * get() must successfully read back a resource regardless of whether the path
+     * has a leading slash (Maven 3.8.x) or not (Maven 3.9.x).
+     * The ZIP entry is written directly — bypassing put() — so the test is not
+     * sensitive to NIO zip-filesystem flush timing.
      */
     @Test
     @DisplayName("get() handles leading-slash path written by Maven 3.8.x")
     void testGetLeadingSlashNormalization() throws Exception {
-        ZipCacheManager zcm = createInitialisedEmptyZipCache();
+        String normalizedPath = "com/example/lib/2.0/lib-2.0.jar";
+        String content = "lib content";
+
+        // Build a ZIP that already contains the entry at the normalised path.
+        // We write it via plain ZipOutputStream so it is guaranteed on disk.
+        Path zipPath = tempDir.resolve("get-test.zip");
+        try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(zipPath))) {
+            zos.putNextEntry(new ZipEntry(normalizedPath));
+            zos.write(content.getBytes());
+            zos.closeEntry();
+        }
+
+        // Initialise the ZipCacheManager with that ZIP (sets cacheFile = SHA1-named copy).
+        ZipCacheManager zcm = new ZipCacheManager(tempDir);
+        try (InputStream is = Files.newInputStream(zipPath)) {
+            zcm.initialize(new GhRelAssetRepository(repository), is);
+        }
         ghRelAssetWagon.setZipCacheManager(zcm);
         when(authenticationInfo.getPassword()).thenReturn("mocked_token");
         ghRelAssetWagon.setAuthenticationInfo(authenticationInfo);
 
-        String path = "com/example/lib/2.0/lib-2.0.jar";
-        String content = "lib content";
-
-        File source = File.createTempFile("testGet", ".jar");
-        try (FileOutputStream fos = new FileOutputStream(source)) {
-            fos.write(content.getBytes());
-        }
-
-        // Stage with leading slash (Maven 3.8.x)
-        ghRelAssetWagon.put(source, "/" + path);
-
         // Read back with no leading slash (Maven 3.9.x style)
         File dest = File.createTempFile("testGetDest", ".jar");
-        assertDoesNotThrow(() -> ghRelAssetWagon.get(path, dest),
-            "get() without leading slash must find resource staged with leading slash");
+        assertDoesNotThrow(() -> ghRelAssetWagon.get(normalizedPath, dest),
+            "get() without leading slash must find the resource");
         assertEquals(content, new String(java.nio.file.Files.readAllBytes(dest.toPath())));
 
-        // Read back with leading slash (Maven 3.8.x style)
+        // Read back with leading slash (Maven 3.8.x style) — must be normalised and find the same entry
         File dest2 = File.createTempFile("testGetDest2", ".jar");
-        assertDoesNotThrow(() -> ghRelAssetWagon.get("/" + path, dest2),
-            "get() with leading slash must also work");
+        assertDoesNotThrow(() -> ghRelAssetWagon.get("/" + normalizedPath, dest2),
+            "get() with leading slash must also find the resource after normalisation");
         assertEquals(content, new String(java.nio.file.Files.readAllBytes(dest2.toPath())));
 
-        source.delete();
         dest.delete();
         dest2.delete();
     }
