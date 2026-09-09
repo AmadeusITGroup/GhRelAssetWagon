@@ -1085,6 +1085,171 @@ public class GhRelAssetWagonTest {
         testArtifact.delete();
     }
 
+    // ── Maven 3.8.x / 3.9.x leading-slash regression tests ──────────────────
+
+    /**
+     * Helper: creates a ZipCacheManager with an empty ZIP already initialised,
+     * bypassing the real openConnectionInternal() which needs GH_RELEASE_ASSET_TOKEN.
+     */
+    private ZipCacheManager createInitialisedEmptyZipCache() throws IOException {
+        Path zipPath = tempDir.resolve("test-leading-slash.zip");
+        // create a minimal valid ZIP (one placeholder entry)
+        try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(zipPath))) {
+            ZipEntry entry = new ZipEntry(".placeholder");
+            zos.putNextEntry(entry);
+            zos.write(new byte[0]);
+            zos.closeEntry();
+        }
+        ZipCacheManager zcm = new ZipCacheManager(tempDir);
+        try (InputStream is = Files.newInputStream(zipPath)) {
+            zcm.initialize(new GhRelAssetRepository(repository), is);
+        }
+        return zcm;
+    }
+
+    /**
+     * Maven 3.8.x passes paths with a leading '/' to wagon.put(), e.g.
+     *   "/com/amadeus/agility/studio/action-apps-sdk/1.0.35/action-apps-sdk-1.0.35.jar"
+     * Maven 3.9.x strips the slash first.  Both must work identically.
+     */
+    @Test
+    @DisplayName("put() with leading-slash path (Maven 3.8.x style) must not throw")
+    void testPutWithLeadingSlashPath() throws Exception {
+        ZipCacheManager zcm = createInitialisedEmptyZipCache();
+        ghRelAssetWagon.setZipCacheManager(zcm);
+        when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+        ghRelAssetWagon.setAuthenticationInfo(authenticationInfo);
+
+        File artifact = File.createTempFile("test-artifact", ".jar");
+        try (FileOutputStream fos = new FileOutputStream(artifact)) {
+            fos.write("artifact content".getBytes());
+        }
+
+        // Leading slash — this is what Maven 3.8.x sends
+        assertDoesNotThrow(() ->
+            ghRelAssetWagon.put(artifact, "/com/example/test-artifact/1.0.0/test-artifact-1.0.0.jar"),
+            "put() must accept Maven 3.8.x style paths that start with '/'"
+        );
+
+        // The artifact should have been staged
+        assertFalse(ghRelAssetWagon.artifactsToUpload.isEmpty(),
+            "Artifact must be staged even when path has a leading '/'");
+
+        artifact.delete();
+    }
+
+    /**
+     * The ZIP entry written by put() with a leading-slash path must be identical
+     * to the entry written with the same path without a leading slash.
+     * Both should resolve to "com/example/…" inside the ZIP, never "/com/example/…".
+     */
+    @Test
+    @DisplayName("put() normalises leading-slash and no-slash paths to the same ZIP entry")
+    void testPutLeadingSlashProducesSameZipEntryAsNoSlash() throws Exception {
+        ZipCacheManager zcm = createInitialisedEmptyZipCache();
+        ghRelAssetWagon.setZipCacheManager(zcm);
+        when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+        ghRelAssetWagon.setAuthenticationInfo(authenticationInfo);
+
+        String contentA = "maven 3.8 content";
+        String normalizedPath = "com/example/test/1.0/test-1.0.jar";
+
+        // Write with leading slash (Maven 3.8.x style)
+        File artifactA = File.createTempFile("testA", ".jar");
+        try (FileOutputStream fos = new FileOutputStream(artifactA)) {
+            fos.write(contentA.getBytes());
+        }
+        ghRelAssetWagon.put(artifactA, "/" + normalizedPath);
+
+        // Verify the ZIP entry is reachable via the normalized (no-slash) path
+        java.nio.file.FileSystem zipFs = ghRelAssetWagon.zipCacheManager.getZipFileSystem();
+        assertTrue(java.nio.file.Files.exists(zipFs.getPath(normalizedPath)),
+            "ZIP entry must be reachable without leading '/' after a leading-slash put()");
+
+        // Read back the content to confirm the entry is complete and correct
+        byte[] stored = java.nio.file.Files.readAllBytes(zipFs.getPath(normalizedPath));
+        assertEquals(contentA, new String(stored),
+            "Content stored under normalized path must match what was written");
+
+        artifactA.delete();
+    }
+
+    /**
+     * resourceExists() must return true when the same resource was staged via
+     * a leading-slash path (Maven 3.8.x) AND when looked up via a no-slash path (Maven 3.9.x).
+     */
+    @Test
+    @DisplayName("resourceExists() handles both leading-slash and no-slash lookup")
+    void testResourceExistsLeadingSlashNormalization() throws Exception {
+        ZipCacheManager zcm = createInitialisedEmptyZipCache();
+        ghRelAssetWagon.setZipCacheManager(zcm);
+        when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+        ghRelAssetWagon.setAuthenticationInfo(authenticationInfo);
+
+        String path = "com/example/artifact/1.0/artifact-1.0.jar";
+        File artifact = File.createTempFile("testRes", ".jar");
+        try (FileOutputStream fos = new FileOutputStream(artifact)) {
+            fos.write("content".getBytes());
+        }
+
+        // Stage via leading-slash (Maven 3.8.x style)
+        ghRelAssetWagon.put(artifact, "/" + path);
+
+        // Both lookup styles must resolve correctly
+        assertTrue(ghRelAssetWagon.resourceExists(path),
+            "resourceExists() without leading slash must find resource staged with leading slash");
+        assertTrue(ghRelAssetWagon.resourceExists("/" + path),
+            "resourceExists() with leading slash must also find the resource");
+
+        artifact.delete();
+    }
+
+    /**
+     * get() must successfully read back a resource regardless of whether the path
+     * has a leading slash (Maven 3.8.x) or not (Maven 3.9.x).
+     *
+     * The entry is written directly via ZipOutputStream — not via put() — so the
+     * test is not sensitive to NIO zip-filesystem flush timing on any JVM/OS.
+     */
+    @Test
+    @DisplayName("get() handles leading-slash path (Maven 3.8.x vs 3.9.x)")
+    void testGetLeadingSlashNormalization() throws Exception {
+        String normalizedPath = "com/example/lib/2.0/lib-2.0.jar";
+        String content = "lib content";
+
+        // Write a proper on-disk ZIP containing the entry at the normalised path.
+        Path zipPath = tempDir.resolve("get-slash-test.zip");
+        try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(zipPath))) {
+            zos.putNextEntry(new ZipEntry(normalizedPath));
+            zos.write(content.getBytes());
+            zos.closeEntry();
+        }
+
+        // Initialise ZipCacheManager from that file (cacheFile = SHA1-named copy).
+        ZipCacheManager zcm = new ZipCacheManager(tempDir);
+        try (InputStream is = Files.newInputStream(zipPath)) {
+            zcm.initialize(new GhRelAssetRepository(repository), is);
+        }
+        ghRelAssetWagon.setZipCacheManager(zcm);
+        when(authenticationInfo.getPassword()).thenReturn("mocked_token");
+        ghRelAssetWagon.setAuthenticationInfo(authenticationInfo);
+
+        // Read back without leading slash (Maven 3.9.x style) — must succeed.
+        File dest = File.createTempFile("testGetDest", ".jar");
+        assertDoesNotThrow(() -> ghRelAssetWagon.get(normalizedPath, dest),
+            "get() without leading slash must find the resource");
+        assertEquals(content, new String(java.nio.file.Files.readAllBytes(dest.toPath())));
+
+        // Read back WITH leading slash (Maven 3.8.x style) — must be normalised and find the same entry.
+        File dest2 = File.createTempFile("testGetDest2", ".jar");
+        assertDoesNotThrow(() -> ghRelAssetWagon.get("/" + normalizedPath, dest2),
+            "get() with leading slash must also find the resource after normalisation");
+        assertEquals(content, new String(java.nio.file.Files.readAllBytes(dest2.toPath())));
+
+        dest.delete();
+        dest2.delete();
+    }
+
     private void setupBasicWireMockStubs() {
         // Mock release endpoint for tag creation/checking
         stubFor(get(urlEqualTo("/repos/owner/repo/releases/tags/v1.0.0"))

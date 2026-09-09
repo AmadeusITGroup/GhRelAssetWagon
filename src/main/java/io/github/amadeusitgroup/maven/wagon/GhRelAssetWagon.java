@@ -205,7 +205,7 @@ public class GhRelAssetWagon extends StreamWagon {
      */
     private final ConfigurationManager configurationManager = ConfigurationManager.getInstance();
 
-    private ZipCacheManager zipCacheManager = new ZipCacheManager();
+    ZipCacheManager zipCacheManager = new ZipCacheManager();
 
     /**
      * Interactive mode flag.
@@ -890,6 +890,10 @@ public class GhRelAssetWagon extends StreamWagon {
     @Override
     public void get(String resourceName, File destination)
             throws TransferFailedException, ResourceDoesNotExistException, AuthorizationException {
+        // Normalize: Maven 3.8.x may supply resource names with a leading '/'
+        if (resourceName != null && resourceName.startsWith("/")) {
+            resourceName = resourceName.substring(1);
+        }
         logger.debug("Getting resource '{}' to '{}", resourceName, destination);
         Resource resource = new Resource(resourceName);
         fireGetInitiated(resource, destination);
@@ -1049,14 +1053,21 @@ public class GhRelAssetWagon extends StreamWagon {
      * @throws IOException If staging fails
      */
     private void stageArtifact(File source, String destination) throws IOException {
+        // Normalize destination: strip any leading '/' so ZIP entries are always relative.
+        // Maven 3.8.x passes paths with a leading '/' while Maven 3.9.x does not; the
+        // ZIP FileSystem treats absolute paths differently and Files.createDirectories()
+        // fails when the parent resolves to the root '/'.
+        String normalizedDestination = destination.startsWith("/") ? destination.substring(1) : destination;
+
         String releaseName = this.getRepository().getUrl().substring(0, this.getRepository().getUrl().lastIndexOf("/"));
         String tagName = this.getRepository().getUrl().substring(this.getRepository().getUrl().lastIndexOf("/") + 1);
 
         logger.debug("stageArtifact - releaseName: {}", releaseName);
         logger.debug("stageArtifact - tagName: {}", tagName);
+        logger.debug("stageArtifact - destination (normalized): {}", normalizedDestination);
 
         try {
-            addResourceToZip(zipCacheManager.getCacheFile(), source.toString(), destination);
+            addResourceToZip(zipCacheManager.getCacheFile(), source.toString(), normalizedDestination);
             this.artifactsToUpload.add(source.toString());
 
         } catch (Exception e) {
@@ -1605,6 +1616,10 @@ public class GhRelAssetWagon extends StreamWagon {
     @Override
     public boolean resourceExists(String resourceName)
             throws TransferFailedException, AuthorizationException {
+        // Normalize: Maven 3.8.x may supply resource names with a leading '/'
+        if (resourceName != null && resourceName.startsWith("/")) {
+            resourceName = resourceName.substring(1);
+        }
         logger.debug("Checking if resource exists: {}", resourceName);
 
         if (!zipCacheManager.isInitialized()) {
@@ -1799,6 +1814,13 @@ public class GhRelAssetWagon extends StreamWagon {
      */
     @Override
     public void put(File source, String destination) throws TransferFailedException {
+        // Normalize destination: Maven 3.8.x may supply paths with a leading '/' while
+        // Maven 3.9.x strips it.  The ZIP FileSystem and ZipEntry both expect relative
+        // (no leading '/') paths to avoid issues with directory creation and entry lookup.
+        if (destination != null && destination.startsWith("/")) {
+            destination = destination.substring(1);
+        }
+
         logger.debug("put {} to {}", source.getAbsolutePath(), destination);
 
         // Track metrics for the upload operation
@@ -1890,12 +1912,14 @@ public class GhRelAssetWagon extends StreamWagon {
             if (parallelEnabled && !isChecksumFile) {
                 try {
                     // Use parallel operations for staging (single file upload)
+                    final String finalDestination = destination;
+                    final File finalFileToUpload = fileToUpload;
                     CompletableFuture<List<ParallelOperationManager.UploadResult>> uploadFuture =
                         parallelOperationManager.uploadFilesParallel(List.of(fileToUpload), new ParallelOperationManager.UploadHandler() {
                             @Override
                             public void upload(File file) {
                                 try {
-                                    stageArtifact(file, destination);
+                                    stageArtifact(file, finalDestination);
                                 } catch (Exception e) {
                                     throw new RuntimeException("Staging failed for " + file.getName(), e);
                                 }
@@ -2083,6 +2107,10 @@ public class GhRelAssetWagon extends StreamWagon {
     public void fillOutputData(OutputData outputData) throws TransferFailedException {
 
         String resourceName = outputData.getResource().getName();
+        // Normalize: Maven 3.8.x may supply resource names with a leading '/'
+        if (resourceName != null && resourceName.startsWith("/")) {
+            resourceName = resourceName.substring(1);
+        }
 
         // For test scenarios, provide a mock output stream
         if (isTestEnvironment()) {
